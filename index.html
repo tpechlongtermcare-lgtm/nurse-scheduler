@@ -40,7 +40,7 @@ body{font-family:'Noto Sans TC','Hiragino Sans',-apple-system,sans-serif;backgro
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
 <script type="text/babel">
 const {useState,useEffect,useMemo}=React;
-const GAS_URL=localStorage.getItem('GAS_URL')||'';
+const GAS_URL='https://script.google.com/macros/s/AKfycbzFlNxrngfvvo5r9K3K-F8kYgbQJCUVt_9b-bVpse1wFiL-bp_U62cEMTb-4O9QfKM3xg/exec';
 const GAS={
   loadData:async()=>{if(!GAS_URL)return null;return(await fetch(GAS_URL+'?action=load')).json()},
   post:async(action,data)=>{if(!GAS_URL)return{success:false};return(await fetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action,data})})).json()},
@@ -1489,42 +1489,23 @@ function App() {
     </div>
   );
 }
-function ConfigModal({onSave,currentUrl}){
-  const[url,setUrl]=React.useState(currentUrl||'');
-  return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:99999}}>
-    <div style={{background:"#FAFAF8",border:"3px solid #003E8A",width:420,maxWidth:"92vw",overflow:"hidden"}}>
-      <div style={{background:"#003E8A",padding:"14px 24px"}}><div style={{fontSize:16,fontWeight:900,color:"#fff",letterSpacing:2}}>初期設定</div><div style={{fontSize:10,color:"rgba(255,255,255,.6)",marginTop:2}}>INITIAL SETUP</div></div>
-      <div style={{height:4,background:"linear-gradient(90deg,#FFD700 0%,#FFD700 30%,transparent 30%,transparent 32%,#FFD700 32%,#FFD700 100%)"}}/>
-      <div style={{padding:24}}>
-        <div style={{fontSize:12,color:"#2D3436",marginBottom:12,lineHeight:1.6}}>請貼上 GAS 部署網址：<br/><span style={{fontSize:10,color:"#9E9A8F"}}>https://script.google.com/macros/s/.../exec</span></div>
-        <input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" style={{width:"100%",padding:"12px",border:"2px solid #003E8A",fontSize:13,outline:"none",boxSizing:"border-box",marginBottom:12}}/>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>{if(url.trim()){localStorage.setItem('GAS_URL',url.trim());location.reload()}}} style={{flex:1,padding:"12px",border:"none",background:"#003E8A",color:"#fff",fontSize:14,fontWeight:900,cursor:"pointer",letterSpacing:2}}>接続</button>
-          <button onClick={()=>onSave('')} style={{padding:"12px 20px",border:"2px solid #E8E6E0",background:"#fff",color:"#9E9A8F",fontSize:12,fontWeight:700,cursor:"pointer"}}>離線模式</button>
-        </div>
-      </div>
-    </div>
-  </div>);
-}
+// ═══════ PWA Bootstrap — 直接載入 ═══════
 function PWAApp(){
-  const[gasUrl]=React.useState(localStorage.getItem('GAS_URL')||'');
   const[ready,setReady]=React.useState(false);
   const[initData,setInitData]=React.useState(null);
-  const[needConfig,setNeedConfig]=React.useState(!gasUrl);
   React.useEffect(()=>{
-    if(needConfig)return;
     const bar=document.getElementById("bar");
     if(bar)bar.style.width="30%";
-    if(!gasUrl){if(bar)bar.style.width="100%";setReady(true);setTimeout(()=>{const el=document.getElementById("loading");if(el)el.classList.add("done")},300);return}
-    fetch(gasUrl+'?action=load').then(r=>r.json()).then(data=>{
-      if(bar)bar.style.width="90%";setInitData(data);try{localStorage.setItem('CACHE_DATA',JSON.stringify(data))}catch(e){}
+    fetch(GAS_URL+'?action=load').then(r=>r.json()).then(data=>{
+      if(bar)bar.style.width="90%";setInitData(data);
+      try{localStorage.setItem('CACHE_DATA',JSON.stringify(data))}catch(e){}
       setTimeout(()=>{if(bar)bar.style.width="100%";setReady(true);const el=document.getElementById("loading");if(el)el.classList.add("done")},300);
     }).catch(err=>{
-      console.warn('Load failed:',err);try{const c=localStorage.getItem('CACHE_DATA');if(c)setInitData(JSON.parse(c))}catch(e){}
+      console.warn('Load failed, using cache:',err);
+      try{const c=localStorage.getItem('CACHE_DATA');if(c)setInitData(JSON.parse(c))}catch(e){}
       if(bar)bar.style.width="100%";setReady(true);const el=document.getElementById("loading");if(el)el.classList.add("done");
     });
-  },[gasUrl,needConfig]);
-  if(needConfig)return<ConfigModal currentUrl={gasUrl} onSave={url=>{setNeedConfig(false)}}/>;
+  },[]);
   if(!ready)return null;
   return<App initialData={initData}/>;
 }
