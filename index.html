@@ -40,15 +40,9 @@ body{font-family:'Noto Sans TC','Hiragino Sans',-apple-system,sans-serif;backgro
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
 <script type="text/babel">
 const {useState,useEffect,useMemo}=React;
-
-/* ═══════ GAS API — 全部用 GET 避免跨域問題 ═══════ */
 const GAS_URL='https://script.google.com/macros/s/AKfycbzFlNxrngfvvo5r9K3K-F8kYgbQJCUVt_9b-bVpse1wFiL-bp_U62cEMTb-4O9QfKM3xg/exec';
 const GAS={
-  call:async(action,data)=>{
-    const url=GAS_URL+'?action='+encodeURIComponent(action)+(data?'&data='+encodeURIComponent(JSON.stringify(data)):'');
-    const resp=await fetch(url);
-    return resp.json();
-  },
+  call:async(action,data)=>{const url=GAS_URL+'?action='+encodeURIComponent(action)+(data?'&data='+encodeURIComponent(JSON.stringify(data)):'');const resp=await fetch(url);return resp.json()},
   loadData:()=>GAS.call('load'),
   saveEvent:(ev)=>GAS.call('saveEvent',{...ev,date:ev.date instanceof Date?ev.date.toISOString():ev.date}),
   deleteEvent:(id)=>GAS.call('deleteEvent',{id}),
@@ -58,7 +52,6 @@ const GAS={
   saveCats:(cats)=>GAS.call('saveCats',{cats}),
   version:()=>GAS.call('version'),
 };
-
 
 /* ═══════ DESIGN SYSTEM ═══════ */
 const JR = {
@@ -1205,7 +1198,7 @@ function Dashboard({ events, today, todos, setTodos, onEdit, onAdd, reminders, e
             {reminders.length === 0 ? <div style={{ padding: 16, textAlign: "center", color: JR.concrete, fontSize: 12 }}>全線正常運行 ✓</div> :
               reminders.map((r, i) => (<ReminderGroup key={i} rem={r} />))}
           </div>
-          <TodoP todos={todos} setTodos={setTodosWithSync} />
+          <TodoP todos={todos} setTodos={setTodos} />
         </div>
       </div>
     </div>
@@ -1542,8 +1535,6 @@ function App({ initialData }) {
     </div>
   );
 }
-
-// ═══════ PWA Bootstrap ═══════
 function PWAApp(){
   const[ready,setReady]=React.useState(false);
   const[initData,setInitData]=React.useState(null);
@@ -1551,12 +1542,11 @@ function PWAApp(){
     const bar=document.getElementById("bar");
     if(bar)bar.style.width="30%";
     GAS.loadData().then(data=>{
-      if(bar)bar.style.width="90%";
-      setInitData(data);
+      if(bar)bar.style.width="90%";setInitData(data);
       try{localStorage.setItem('CACHE_DATA',JSON.stringify(data))}catch(e){}
       setTimeout(()=>{if(bar)bar.style.width="100%";setReady(true);const el=document.getElementById("loading");if(el)el.classList.add("done")},300);
     }).catch(err=>{
-      console.warn('Load failed, using cache:',err);
+      console.warn('Load failed:',err);
       try{const c=localStorage.getItem('CACHE_DATA');if(c)setInitData(JSON.parse(c))}catch(e){}
       if(bar)bar.style.width="100%";setReady(true);const el=document.getElementById("loading");if(el)el.classList.add("done");
     });
