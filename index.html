@@ -1607,12 +1607,14 @@ function App({ initialData }) {
     </div>
   );
 }
-// ═══════ NOTIFICATION BANNER ═══════
+// ═══════ NOTIFICATION BANNER (Safe) ═══════
 function NotifBanner() {
   const [status, setStatus] = React.useState(() => {
-    if (typeof Notification === 'undefined') return 'unsupported';
-    if (Notification.permission === 'granted') return 'granted';
-    if (Notification.permission === 'denied') return 'denied';
+    try {
+      if (typeof Notification === 'undefined') return 'unsupported';
+      if (Notification.permission === 'granted') return 'granted';
+      if (Notification.permission === 'denied') return 'denied';
+    } catch(e) { return 'unsupported'; }
     return 'default';
   });
   const [loading, setLoading] = React.useState(false);
@@ -1620,65 +1622,50 @@ function NotifBanner() {
 
   // Auto-register token if permission already granted
   React.useEffect(() => {
-    if (Notification.permission === 'granted') {
-      registerToken();
-    }
+    try { if (status === 'granted') doRegister(); } catch(e) {}
   }, []);
 
-  async function registerToken() {
+  async function doRegister() {
     try {
-      if (!_swReg) _swReg = await navigator.serviceWorker.ready;
-      if (!_messaging) initFirebase();
-      if (!_messaging) { console.error('No messaging'); return; }
-      
-      var token = await _messaging.getToken({
-        vapidKey: VAPID_KEY,
-        serviceWorkerRegistration: _swReg
-      });
-      console.log('FCM Token obtained:', token ? token.substring(0, 20) + '...' : 'null');
-      
-      if (token) {
-        var saveUrl = GAS_URL + '?action=saveFCMToken&data=' + encodeURIComponent(JSON.stringify({token: token}));
-        console.log('Saving token to GAS...');
-        var resp = await fetch(saveUrl);
-        var result = await resp.json();
-        console.log('Token save result:', JSON.stringify(result));
-        setMsg('✅ Token 已儲存');
-      }
-    } catch(e) {
-      console.error('Token registration error:', e);
-      setMsg('⚠ ' + e.message);
-    }
+      if (typeof requestNotificationPermission === 'undefined') return;
+      var token = await requestNotificationPermission();
+      if (token) setMsg('✅ Token 已儲存');
+      else setMsg('');
+    } catch(e) { console.warn('Token reg:', e); }
   }
+
+  if (status === 'unsupported') return null;
 
   if (status === 'granted') return (
     <div style={{background:'#00A651',padding:'6px 16px',display:'flex',alignItems:'center',gap:8,justifyContent:'center',flexWrap:'wrap'}}>
       <span style={{fontSize:11,color:'#fff',fontWeight:700}}>✅ 推播通知已啟用</span>
       {msg && <span style={{fontSize:9,color:'rgba(255,255,255,.7)'}}>{msg}</span>}
-      <button onClick={registerToken} style={{padding:'3px 10px',border:'1px solid rgba(255,255,255,.5)',background:'transparent',color:'#fff',fontSize:9,cursor:'pointer',fontWeight:700}}>重新註冊</button>
+      <button onClick={doRegister} style={{padding:'3px 10px',border:'1px solid rgba(255,255,255,.5)',background:'transparent',color:'#fff',fontSize:9,cursor:'pointer',fontWeight:700}}>重新註冊</button>
     </div>
   );
-  if (status === 'unsupported') return null;
+
   if (status === 'denied') return (
     <div style={{background:'#E60012',padding:'6px 16px',display:'flex',alignItems:'center',gap:8,justifyContent:'center'}}>
-      <span style={{fontSize:11,color:'#fff',fontWeight:700}}>⚠ 通知已被封鎖 — 請到瀏覽器設定中開啟通知權限</span>
+      <span style={{fontSize:11,color:'#fff',fontWeight:700}}>⚠ 通知已被封鎖 — 請到瀏覽器設定中開啟</span>
     </div>
   );
 
   return (
     <div style={{background:'#003E8A',padding:'8px 16px',display:'flex',alignItems:'center',gap:10,justifyContent:'center',flexWrap:'wrap',borderBottom:'2px solid #FFD700'}}>
       <span style={{fontSize:13}}>🔔</span>
-      <span style={{fontSize:12,color:'#fff',fontWeight:700}}>啟用推播通知，行程前自動提醒</span>
+      <span style={{fontSize:12,color:'#fff',fontWeight:700}}>啟用推播通知</span>
       <button onClick={async()=>{
         setLoading(true); setMsg('');
         try {
-          var token = await requestNotificationPermission();
-          if (token) { setStatus('granted'); setMsg('✅ 已啟用'); }
-          else { setStatus(Notification.permission === 'denied' ? 'denied' : 'default'); setMsg('❌ 未取得權限'); }
+          if (typeof requestNotificationPermission !== 'undefined') {
+            var token = await requestNotificationPermission();
+            if (token) { setStatus('granted'); setMsg('✅'); }
+            else { setStatus(Notification.permission === 'denied' ? 'denied' : 'default'); }
+          }
         } catch(e) { setMsg('❌ ' + e.message); }
         setLoading(false);
-      }} disabled={loading} style={{padding:'5px 16px',border:'2px solid #FFD700',background:'rgba(255,215,0,.15)',color:'#FFD700',fontSize:11,fontWeight:900,cursor:'pointer',letterSpacing:1}}>
-        {loading ? '設定中...' : '啟用通知'}
+      }} disabled={loading} style={{padding:'5px 16px',border:'2px solid #FFD700',background:'rgba(255,215,0,.15)',color:'#FFD700',fontSize:11,fontWeight:900,cursor:'pointer'}}>
+        {loading ? '...' : '啟用'}
       </button>
       {msg && <span style={{fontSize:10,color:'#FFD700'}}>{msg}</span>}
     </div>
@@ -1702,7 +1689,8 @@ function PWAApp(){
     });
   },[]);
   if(!ready)return null;
-  return<><NotifBanner/><App initialData={initData}/></>;
+  var showNotif = typeof Notification !== 'undefined' && typeof requestNotificationPermission !== 'undefined';
+  return<>{showNotif && <NotifBanner/>}<App initialData={initData}/></>;
 }
 ReactDOM.createRoot(document.getElementById("app")).render(<PWAApp/>);
 </script>
