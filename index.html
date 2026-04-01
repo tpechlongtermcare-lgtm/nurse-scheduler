@@ -42,14 +42,19 @@ body{font-family:'Noto Sans TC','Hiragino Sans',-apple-system,sans-serif;backgro
 const {useState,useEffect,useMemo}=React;
 const GAS_URL='https://script.google.com/macros/s/AKfycbzFlNxrngfvvo5r9K3K-F8kYgbQJCUVt_9b-bVpse1wFiL-bp_U62cEMTb-4O9QfKM3xg/exec';
 const GAS={
-  loadData:async()=>{if(!GAS_URL)return null;return(await fetch(GAS_URL+'?action=load')).json()},
-  post:async(action,data)=>{if(!GAS_URL)return{success:false};return(await fetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action,data})})).json()},
-  saveEvent:ev=>GAS.post('saveEvent',{...ev,date:ev.date instanceof Date?ev.date.toISOString():ev.date}),
-  deleteEvent:id=>GAS.post('deleteEvent',{id}),
-  saveTodo:t=>GAS.post('saveTodo',{...t,dueDate:t.dueDate instanceof Date?t.dueDate.toISOString():t.dueDate}),
-  deleteTodo:id=>GAS.post('deleteTodo',{id}),
-  toggleTodo:id=>GAS.post('toggleTodo',{id}),
-  saveCats:cats=>GAS.post('saveCats',{cats}),
+  call:async(action,data)=>{
+    const url=GAS_URL+'?action='+encodeURIComponent(action)+(data?'&data='+encodeURIComponent(JSON.stringify(data)):'');
+    const resp=await fetch(url);
+    return resp.json();
+  },
+  loadData:()=>GAS.call('load'),
+  saveEvent:(ev)=>GAS.call('saveEvent',{...ev,date:ev.date instanceof Date?ev.date.toISOString():ev.date}),
+  deleteEvent:(id)=>GAS.call('deleteEvent',{id}),
+  saveTodo:(t)=>GAS.call('saveTodo',{...t,dueDate:t.dueDate instanceof Date?t.dueDate.toISOString():t.dueDate}),
+  deleteTodo:(id)=>GAS.call('deleteTodo',{id}),
+  toggleTodo:(id)=>GAS.call('toggleTodo',{id}),
+  saveCats:(cats)=>GAS.call('saveCats',{cats}),
+  version:()=>GAS.call('version'),
 };
 
 /* ═══════ DESIGN SYSTEM ═══════ */
@@ -1496,7 +1501,7 @@ function PWAApp(){
   React.useEffect(()=>{
     const bar=document.getElementById("bar");
     if(bar)bar.style.width="30%";
-    fetch(GAS_URL+'?action=load').then(r=>r.json()).then(data=>{
+    GAS.loadData().then(data=>{
       if(bar)bar.style.width="90%";setInitData(data);
       try{localStorage.setItem('CACHE_DATA',JSON.stringify(data))}catch(e){}
       setTimeout(()=>{if(bar)bar.style.width="100%";setReady(true);const el=document.getElementById("loading");if(el)el.classList.add("done")},300);
