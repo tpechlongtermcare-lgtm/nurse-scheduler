@@ -1,5 +1,5 @@
 // ═══════ 護理長行程管理 — Service Worker ═══════
-const CACHE_NAME = 'nurse-scheduler-v6';
+const CACHE_NAME = 'nurse-scheduler-v7';
 const SHELL_URLS = [
   './',
   './index.html',
@@ -10,35 +10,25 @@ const SHELL_URLS = [
   'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js',
 ];
 
-// Install: cache app shell
+// Install
 self.addEventListener('install', (e) => {
-  e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS))
-  );
+  e.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS)));
   self.skipWaiting();
 });
 
-// Activate: clean old caches
+// Activate
 self.addEventListener('activate', (e) => {
-  e.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
-  );
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))));
   self.clients.claim();
 });
 
-// Fetch: network first for API, cache first for assets
+// Fetch
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-
-  // GAS API calls — always network
-  if (url.hostname.includes('script.google.com') || url.hostname.includes('googleusercontent.com')) {
+  if (url.hostname.includes('script.google.com') || url.hostname.includes('googleapis.com') || url.hostname.includes('fcm')) {
     e.respondWith(fetch(e.request));
     return;
   }
-
-  // App shell & CDN — cache first, fallback network
   e.respondWith(
     caches.match(e.request).then((cached) => {
       if (cached) return cached;
@@ -50,10 +40,51 @@ self.addEventListener('fetch', (e) => {
         return resp;
       });
     }).catch(() => {
-      // Offline fallback
-      if (e.request.mode === 'navigate') {
-        return caches.match('./index.html');
+      if (e.request.mode === 'navigate') return caches.match('./index.html');
+    })
+  );
+});
+
+// ═══════ PUSH NOTIFICATION HANDLER ═══════
+self.addEventListener('push', (e) => {
+  let data = { title: '護理長行程管理', body: '您有新的通知' };
+  
+  if (e.data) {
+    try {
+      const payload = e.data.json();
+      if (payload.notification) {
+        data = payload.notification;
+      } else if (payload.data) {
+        data = payload.data;
       }
+    } catch (err) {
+      data.body = e.data.text();
+    }
+  }
+
+  const options = {
+    body: data.body || '',
+    icon: data.icon || './icon-192.png',
+    badge: './icon-192.png',
+    vibrate: [200, 100, 200, 100, 200],
+    tag: 'nurse-scheduler-' + Date.now(),
+    data: { url: data.click_action || data.url || './' },
+    actions: [{ action: 'open', title: '開啟' }],
+  };
+
+  e.waitUntil(self.registration.showNotification(data.title || '護理長行程管理', options));
+});
+
+// 點擊通知 → 開啟 App
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || './';
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if (client.url.includes('nurse-scheduler') && 'focus' in client) return client.focus();
+      }
+      return clients.openWindow(url);
     })
   );
 });
