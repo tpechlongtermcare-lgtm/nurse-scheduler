@@ -34,46 +34,80 @@ body{font-family:'Noto Sans TC','Hiragino Sans',-apple-system,sans-serif;backgro
   <div class="b"><div class="bi" id="bar" style="width:10%"></div></div>
 </div>
 <div id="app"></div>
-<script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').then(r=>console.log('SW:',r.scope)).catch(e=>console.warn('SW fail:',e));}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
 <script>
-// ═══════ FIREBASE CONFIG — 貼入你的設定 ═══════
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyDAR_sR9gNyh-eo8z51I7ku3VgAo9wwoVI",
-  authDomain: "nurse-scheduler-ff051.firebaseapp.com",
-  projectId: "nurse-scheduler-ff051",
-  storageBucket: "nurse-scheduler-ff051.firebasestorage.app",
-  messagingSenderId: "658105158354",
-  appId: "1:658105158354:web:4209e5c1dc5ffd08c4bb0b"
-};
-const VAPID_KEY = "BB-beQva2nSlVBP0QE0RgcyTHqUMZaRmTDEinfPIosvtaEHnVn0kSVwaqLs6SjZFTWp0Y6FaZMBimwrmlJAz-do";
-
-// Init Firebase
+// ═══════ SERVICE WORKER + FIREBASE INIT ═══════
+let _swReg = null;
 let _messaging = null;
-try {
-  if (FIREBASE_CONFIG.apiKey !== "在此貼入") {
-    firebase.initializeApp(FIREBASE_CONFIG);
+let _firebaseReady = false;
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(function(reg) {
+    console.log('SW registered:', reg.scope);
+    _swReg = reg;
+    initFirebase();
+  }).catch(function(err) {
+    console.warn('SW registration failed:', err);
+  });
+}
+
+function initFirebase() {
+  try {
+    var app = firebase.initializeApp({
+      apiKey: "AIzaSyDAR_sR9gNyh-eo8z51I7ku3VgAo9wwoVI",
+      authDomain: "nurse-scheduler-ff051.firebaseapp.com",
+      projectId: "nurse-scheduler-ff051",
+      storageBucket: "nurse-scheduler-ff051.firebasestorage.app",
+      messagingSenderId: "658105158354",
+      appId: "1:658105158354:web:4209e5c1dc5ffd08c4bb0b"
+    });
     _messaging = firebase.messaging();
+    _firebaseReady = true;
+    console.log('Firebase ready');
+  } catch(e) {
+    console.warn('Firebase init error:', e);
   }
-} catch(e) { console.warn('Firebase init:', e); }
+}
+
+var VAPID_KEY = "BB-beQva2nSlVBP0QE0RgcyTHqUMZaRmTDEinfPIosvtaEHnVn0kSVwaqLs6SjZFTWp0Y6FaZMBimwrmlJAz-do";
 
 async function requestNotificationPermission() {
-  if (!_messaging) return null;
   try {
-    const permission = await Notification.requestPermission();
+    // Wait for SW if not ready
+    if (!_swReg) {
+      _swReg = await navigator.serviceWorker.ready;
+    }
+    if (!_messaging) {
+      initFirebase();
+    }
+    if (!_messaging) {
+      console.error('Firebase messaging not available');
+      return null;
+    }
+
+    var permission = await Notification.requestPermission();
+    console.log('Notification permission:', permission);
     if (permission !== 'granted') return null;
-    const token = await _messaging.getToken({ vapidKey: VAPID_KEY });
+
+    var token = await _messaging.getToken({
+      vapidKey: VAPID_KEY,
+      serviceWorkerRegistration: _swReg
+    });
+    console.log('FCM Token:', token);
+
     if (token) {
-      // Save to GAS
-      const gasUrl = 'https://script.google.com/macros/s/AKfycbzFlNxrngfvvo5r9K3K-F8kYgbQJCUVt_9b-bVpse1wFiL-bp_U62cEMTb-4O9QfKM3xg/exec';
+      var gasUrl = 'https://script.google.com/macros/s/AKfycbzFlNxrngfvvo5r9K3K-F8kYgbQJCUVt_9b-bVpse1wFiL-bp_U62cEMTb-4O9QfKM3xg/exec';
       fetch(gasUrl + '?action=saveFCMToken&data=' + encodeURIComponent(JSON.stringify({token: token})));
     }
     return token;
-  } catch(e) { console.warn('FCM token error:', e); return null; }
+  } catch(e) {
+    console.error('FCM token error:', e);
+    return null;
+  }
 }
 </script>
 <script type="text/babel">
@@ -1582,26 +1616,45 @@ function NotifBanner() {
     return 'default';
   });
   const [loading, setLoading] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
 
-  if (status === 'granted' || status === 'unsupported' || !_messaging) return null;
+  // Already granted - hide after brief confirmation
+  if (status === 'granted') return (
+    <div style={{background:'#00A651',padding:'6px 16px',display:'flex',alignItems:'center',gap:8,justifyContent:'center'}}>
+      <span style={{fontSize:11,color:'#fff',fontWeight:700}}>✅ 推播通知已啟用 — 行程前會自動通知</span>
+    </div>
+  );
+  if (status === 'unsupported') return null;
   if (status === 'denied') return (
-    <div style={{background:'#E60012',padding:'8px 16px',display:'flex',alignItems:'center',gap:8,justifyContent:'center'}}>
-      <span style={{fontSize:12,color:'#fff',fontWeight:700}}>通知已被封鎖 — 請到瀏覽器設定中開啟通知權限</span>
+    <div style={{background:'#E60012',padding:'6px 16px',display:'flex',alignItems:'center',gap:8,justifyContent:'center'}}>
+      <span style={{fontSize:11,color:'#fff',fontWeight:700}}>⚠ 通知已被封鎖 — 請到瀏覽器設定中開啟通知權限</span>
     </div>
   );
 
   return (
-    <div style={{background:'#003E8A',padding:'8px 16px',display:'flex',alignItems:'center',gap:10,justifyContent:'center',borderBottom:'2px solid #FFD700'}}>
+    <div style={{background:'#003E8A',padding:'8px 16px',display:'flex',alignItems:'center',gap:10,justifyContent:'center',flexWrap:'wrap',borderBottom:'2px solid #FFD700'}}>
       <span style={{fontSize:13}}>🔔</span>
       <span style={{fontSize:12,color:'#fff',fontWeight:700}}>啟用推播通知，行程前自動提醒</span>
       <button onClick={async()=>{
         setLoading(true);
-        const token = await requestNotificationPermission();
-        setStatus(token ? 'granted' : 'denied');
+        setMsg('');
+        try {
+          var token = await requestNotificationPermission();
+          if (token) {
+            setStatus('granted');
+            setMsg('✅ 已啟用');
+          } else {
+            setStatus(Notification.permission === 'denied' ? 'denied' : 'default');
+            setMsg('❌ 未取得權限');
+          }
+        } catch(e) {
+          setMsg('❌ ' + e.message);
+        }
         setLoading(false);
       }} disabled={loading} style={{padding:'5px 16px',border:'2px solid #FFD700',background:'rgba(255,215,0,.15)',color:'#FFD700',fontSize:11,fontWeight:900,cursor:'pointer',letterSpacing:1}}>
         {loading ? '設定中...' : '啟用通知'}
       </button>
+      {msg && <span style={{fontSize:10,color:'#FFD700'}}>{msg}</span>}
     </div>
   );
 }
