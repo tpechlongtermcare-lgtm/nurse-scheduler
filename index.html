@@ -40,6 +40,8 @@ body{font-family:'Noto Sans TC','Hiragino Sans',-apple-system,sans-serif;backgro
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
 <script type="text/babel">
 const {useState,useEffect,useMemo}=React;
+
+/* ═══════ GAS API — 全部用 GET 避免跨域問題 ═══════ */
 const GAS_URL='https://script.google.com/macros/s/AKfycbzFlNxrngfvvo5r9K3K-F8kYgbQJCUVt_9b-bVpse1wFiL-bp_U62cEMTb-4O9QfKM3xg/exec';
 const GAS={
   call:async(action,data)=>{
@@ -56,6 +58,7 @@ const GAS={
   saveCats:(cats)=>GAS.call('saveCats',{cats}),
   version:()=>GAS.call('version'),
 };
+
 
 /* ═══════ DESIGN SYSTEM ═══════ */
 const JR = {
@@ -1202,7 +1205,7 @@ function Dashboard({ events, today, todos, setTodos, onEdit, onAdd, reminders, e
             {reminders.length === 0 ? <div style={{ padding: 16, textAlign: "center", color: JR.concrete, fontSize: 12 }}>全線正常運行 ✓</div> :
               reminders.map((r, i) => (<ReminderGroup key={i} rem={r} />))}
           </div>
-          <TodoP todos={todos} setTodos={setTodos} />
+          <TodoP todos={todos} setTodos={setTodosWithSync} />
         </div>
       </div>
     </div>
@@ -1318,10 +1321,14 @@ function CatSettings({ cats, setCats, onClose }) {
 }
 
 /* ═══════ APP ═══════ */
-function App() {
-  const [events, setEvents] = useState(initEv);
-  const [todos, setTodos] = useState(initTd);
-  const [cats, setCats] = useState([...DEFAULT_CATS]);
+function App({ initialData }) {
+  // Parse backend data if available, otherwise use sample data
+  const parseEvts = (arr) => (arr || []).map((e) => ({ ...e, date: new Date(e.date) }));
+  const parseTds = (arr) => (arr || []).map((t) => ({ ...t, dueDate: t.dueDate ? new Date(t.dueDate) : new Date() }));
+
+  const [events, setEvents] = useState(() => initialData && initialData.events && initialData.events.length > 0 ? parseEvts(initialData.events) : initEv());
+  const [todos, setTodos] = useState(() => initialData && initialData.todos && initialData.todos.length > 0 ? parseTds(initialData.todos) : initTd());
+  const [cats, setCats] = useState(() => initialData && initialData.cats && initialData.cats.length > 0 ? initialData.cats : [...DEFAULT_CATS]);
   const [view, setView] = useState("dashboard");
   const [calSub, setCalSub] = useState("month");
   const [viewDate, setViewDate] = useState(new Date());
@@ -1333,11 +1340,20 @@ function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showFilter, setShowFilter] = useState(false);
   const [voiceOn, setVoiceOn] = useState(() => { try { return localStorage.getItem("voiceOn") !== "false"; } catch(e) { return true; } });
-  const [syncStatus, setSyncStatus] = useState("ok"); // ok | syncing | error
-  const [dataVersion, setDataVersion] = useState(0);
+  const [syncStatus, setSyncStatus] = useState("ok");
+  const [dataVersion, setDataVersion] = useState(() => initialData && initialData.v ? initialData.v : 0);
 
-  // Sync module-level CATS for gc() function
+  // Sync module-level CATS for gc() function + save to backend
   useEffect(() => { CATS = cats; }, [cats]);
+  const saveCatsRef = useState({ timeout: null })[0];
+  const setCatsWithSync = (updater) => {
+    setCats((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      clearTimeout(saveCatsRef.timeout);
+      saveCatsRef.timeout = setTimeout(() => gasCall("saveCats", next), 500);
+      return next;
+    });
+  };
 
   const today = new Date();
   const reminders = useRem(events, todos);
@@ -1414,11 +1430,43 @@ function App() {
     });
   }, [events, filters]);
 
+  // ── GAS helper: safely call backend ──
+  const gasCall = async (method, ...args) => { try { if (typeof GAS !== "undefined" && GAS[method]) await GAS[method](...args); } catch (e) { console.warn("GAS " + method + " failed:", e); } };
+
   const handleAdd = (date, hour, cat) => setModal({ title: "", cat: cat || "meeting", priority: "normal", date: date || today, startH: hour ?? 9, startM: 0, endH: (hour ?? 9) + 1, endM: 0, note: "" });
   const handleEdit = (ev) => setModal({ ...ev });
-  const handleSave = (ev) => { setEvents((p) => { const i = p.findIndex((e) => e.id === ev.id); if (i >= 0) { const c = [...p]; c[i] = ev; return c; } return [...p, ev]; }); setModal(null); };
-  const handleDel = (id) => { setEvents((p) => p.filter((e) => e.id !== id)); setModal(null); };
-  const handleUpdate = (ev) => setEvents((p) => { const i = p.findIndex((e) => e.id === ev.id); if (i >= 0) { const c = [...p]; c[i] = ev; return c; } return p; });
+
+  const handleSave = (ev) => {
+    setEvents((p) => { const i = p.findIndex((e) => e.id === ev.id); if (i >= 0) { const c = [...p]; c[i] = ev; return c; } return [...p, ev]; });
+    setModal(null);
+    gasCall("saveEvent", ev);
+  };
+  const handleDel = (id) => {
+    setEvents((p) => p.filter((e) => e.id !== id));
+    setModal(null);
+    gasCall("deleteEvent", id);
+  };
+  const handleUpdate = (ev) => {
+    setEvents((p) => { const i = p.findIndex((e) => e.id === ev.id); if (i >= 0) { const c = [...p]; c[i] = ev; return c; } return p; });
+    gasCall("saveEvent", ev);
+  };
+
+  // Wrap setTodos to auto-save to backend
+  const setTodosWithSync = (updater) => {
+    setTodos((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      // Find new or changed items and sync them
+      next.forEach((t) => {
+        const old = prev.find((o) => o.id === t.id);
+        if (!old) { gasCall("saveTodo", t); }
+        else if (old.done !== t.done) { gasCall("toggleTodo", t.id); }
+        else if (old.text !== t.text || old.priority !== t.priority) { gasCall("saveTodo", t); }
+      });
+      // Find deleted items
+      prev.forEach((o) => { if (!next.find((t) => t.id === o.id)) gasCall("deleteTodo", o.id); });
+      return next;
+    });
+  };
 
   // Build JR-style marquee: "次は XX XX:XX発 番線X ● reminder1 ● reminder2"
   const marqueeItems = [];
@@ -1473,12 +1521,12 @@ function App() {
       {(isMobile ? showFilter : true) && <FilterBar filters={filters} setFilters={setFilters} />}
 
       {/* Content */}
-      {view === "dashboard" && <Dashboard events={filteredEv} today={today} todos={todos} setTodos={setTodos} onEdit={handleEdit} onAdd={handleAdd} reminders={reminders} expanded={expanded} setExpanded={setExpanded} isMobile={isMobile} />}
+      {view === "dashboard" && <Dashboard events={filteredEv} today={today} todos={todos} setTodos={setTodosWithSync} onEdit={handleEdit} onAdd={handleAdd} reminders={reminders} expanded={expanded} setExpanded={setExpanded} isMobile={isMobile} />}
       {view === "calendar" && <CalendarView events={filteredEv} today={today} onEdit={handleEdit} onAdd={handleAdd} onUpdate={handleUpdate} calSub={calSub} setCalSub={setCalSub} viewDate={viewDate} setViewDate={setViewDate} expanded={expanded} setExpanded={setExpanded} />}
       {view === "gantt" && <GanttView events={filteredEv} today={today} onEdit={handleEdit} viewDate={viewDate} setViewDate={setViewDate} expanded={expanded} setExpanded={setExpanded} />}
       {view === "kanban" && <KanbanView events={filteredEv} today={today} onEdit={handleEdit} onAdd={handleAdd} />}
       {modal && <Modal event={modal} events={events} onSave={handleSave} onDelete={handleDel} onClose={() => setModal(null)} />}
-      {showCatSettings && <CatSettings cats={cats} setCats={setCats} onClose={() => setShowCatSettings(false)} />}
+      {showCatSettings && <CatSettings cats={cats} setCats={setCatsWithSync} onClose={() => setShowCatSettings(false)} />}
 
       {/* MOBILE BOTTOM TAB BAR */}
       {isMobile && (
@@ -1494,7 +1542,8 @@ function App() {
     </div>
   );
 }
-// ═══════ PWA Bootstrap — 直接載入 ═══════
+
+// ═══════ PWA Bootstrap ═══════
 function PWAApp(){
   const[ready,setReady]=React.useState(false);
   const[initData,setInitData]=React.useState(null);
@@ -1502,7 +1551,8 @@ function PWAApp(){
     const bar=document.getElementById("bar");
     if(bar)bar.style.width="30%";
     GAS.loadData().then(data=>{
-      if(bar)bar.style.width="90%";setInitData(data);
+      if(bar)bar.style.width="90%";
+      setInitData(data);
       try{localStorage.setItem('CACHE_DATA',JSON.stringify(data))}catch(e){}
       setTimeout(()=>{if(bar)bar.style.width="100%";setReady(true);const el=document.getElementById("loading");if(el)el.classList.add("done")},300);
     }).catch(err=>{
