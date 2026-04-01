@@ -1,0 +1,1487 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>護理長行程管理</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#003E8A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="行程管理">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Noto Sans TC','Hiragino Sans',-apple-system,sans-serif;background:#FAFAF8;color:#2D3436;-webkit-tap-highlight-color:transparent}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:#C5C2B8}
+#loading{position:fixed;inset:0;background:#003E8A;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;transition:opacity .5s}
+#loading.done{opacity:0;pointer-events:none}
+#loading .t{color:#fff;font-size:18px;font-weight:900;letter-spacing:3px;margin-top:16px}
+#loading .s{color:rgba(255,255,255,.4);font-size:9px;letter-spacing:4px;margin-top:4px}
+#loading .b{width:180px;height:3px;background:rgba(255,255,255,.2);margin-top:16px;overflow:hidden}
+#loading .bi{height:100%;background:#FFD700;transition:width .3s}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes mq{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}
+</style>
+</head>
+<body>
+<div id="loading">
+  <svg width="50" height="50" viewBox="0 0 50 50"><rect width="50" height="50" rx="25" fill="rgba(255,255,255,.15)"/><text x="25" y="32" text-anchor="middle" fill="#fff" font-size="18" font-weight="900">N</text></svg>
+  <div class="t">護理長行程管理</div>
+  <div class="s">NURSE MANAGER SCHEDULER</div>
+  <div class="b"><div class="bi" id="bar" style="width:10%"></div></div>
+</div>
+<div id="app"></div>
+<script>
+if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').then(r=>console.log('SW:',r.scope)).catch(e=>console.warn('SW fail:',e));}
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.15.0/Recharts.min.js"></script>
+<script type="text/babel">
+const {useState,useEffect,useMemo}=React;
+const {PieChart,Pie,Cell,BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer}=Recharts;
+const GAS_URL=localStorage.getItem('GAS_URL')||'';
+const GAS={
+  loadData:async()=>{if(!GAS_URL)return null;return(await fetch(GAS_URL+'?action=load')).json()},
+  post:async(action,data)=>{if(!GAS_URL)return{success:false};return(await fetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({action,data})})).json()},
+  saveEvent:ev=>GAS.post('saveEvent',{...ev,date:ev.date instanceof Date?ev.date.toISOString():ev.date}),
+  deleteEvent:id=>GAS.post('deleteEvent',{id}),
+  saveTodo:t=>GAS.post('saveTodo',{...t,dueDate:t.dueDate instanceof Date?t.dueDate.toISOString():t.dueDate}),
+  deleteTodo:id=>GAS.post('deleteTodo',{id}),
+  toggleTodo:id=>GAS.post('toggleTodo',{id}),
+  saveCats:cats=>GAS.post('saveCats',{cats}),
+};
+
+/* ═══════ DESIGN SYSTEM ═══════ */
+const JR = {
+  blue: "#003E8A", blueL: "#0062D6", blueG: "#4A90D9", white: "#FFF",
+  cream: "#F7F6F1", snow: "#FAFAF8", steel: "#E8E6E0", rail: "#C5C2B8",
+  concrete: "#9E9A8F", track: "#2D3436", dark: "#1A1C1E",
+  gRed: "#E60012", gGreen: "#00A651", gYellow: "#FFB800", gOrange: "#F07F00",
+  nozomi: "#FFD700", l1: "#0062D6", l2: "#F07F00", l3: "#00A651", l4: "#9B30FF",
+};
+const DEFAULT_CATS = [
+  { id: "meeting", label: "院內會議", pl: "1", color: "#0062D6" },
+  { id: "audit", label: "品管稽核", pl: "2", color: "#F07F00" },
+  { id: "training", label: "在職教育", pl: "3", color: "#00A651" },
+  { id: "family", label: "家屬溝通", pl: "4", color: "#9B30FF" },
+];
+const COLOR_PALETTE = ["#0062D6","#F07F00","#00A651","#9B30FF","#E60012","#00BCD4","#FF5722","#795548","#607D8B","#E91E63","#3F51B5","#009688"];
+const PRI = {
+  high: { label: "急行", color: JR.gRed },
+  normal: { label: "普通", color: JR.blue },
+  low: { label: "各停", color: JR.concrete },
+};
+const VIEWS = [
+  { id: "dashboard", label: "総合案内", sub: "OVERVIEW" },
+  { id: "calendar", label: "運行表", sub: "CALENDAR" },
+  { id: "gantt", label: "時刻表", sub: "TIMETABLE" },
+  { id: "kanban", label: "番線別", sub: "PLATFORM" },
+];
+const HOURS = Array.from({ length: 13 }, (_, i) => i + 7);
+const WD = ["日", "一", "二", "三", "四", "五", "六"];
+
+/* ═══════ UTILS ═══════ */
+const roc = (d) => d.getFullYear() - 1911;
+const p2 = (n) => String(n).padStart(2, "0");
+const ft = (h, m) => p2(h) + ":" + p2(m);
+const fd = (d) => roc(d) + "." + p2(d.getMonth() + 1) + "." + p2(d.getDate());
+const fds = (d) => p2(d.getMonth() + 1) + "/" + p2(d.getDate());
+const gid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const sd = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+const sow = (d) => { const r = new Date(d); r.setDate(r.getDate() - r.getDay()); return r; };
+const addD = (d, n) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
+const dim = (y, m) => new Date(y, m + 1, 0).getDate();
+const eMin = (e) => (e.endH * 60 + e.endM) - (e.startH * 60 + e.startM);
+let CATS = [...DEFAULT_CATS];
+const gc = (id) => CATS.find((c) => c.id === id) || CATS[0];
+const font = `'Noto Sans TC','Hiragino Sans',-apple-system,sans-serif`;
+
+/* ═══════ SAMPLE DATA ═══════ */
+function initEv() {
+  const t = new Date(), y = t.getFullYear(), m = t.getMonth(), d = t.getDate();
+  return [
+    { id: gid(), title: "護理部主管會議", cat: "meeting", date: new Date(y, m, d), startH: 9, startM: 0, endH: 10, endM: 30, note: "3F大會議室", priority: "high" },
+    { id: gid(), title: "感控月稽核", cat: "audit", date: new Date(y, m, d), startH: 13, startM: 0, endH: 14, endM: 0, note: "2F護理站", priority: "normal" },
+    { id: gid(), title: "新人CPR訓練", cat: "training", date: new Date(y, m, d), startH: 15, startM: 0, endH: 16, endM: 30, note: "B1技能教室", priority: "normal" },
+    { id: gid(), title: "家屬個案討論", cat: "family", date: new Date(y, m, d), startH: 11, startM: 0, endH: 11, endM: 30, note: "王○○", priority: "low" },
+    { id: gid(), title: "院務行政會議", cat: "meeting", date: new Date(y, m, d + 1), startH: 10, startM: 0, endH: 11, endM: 30, note: "院長室", priority: "high" },
+    { id: gid(), title: "家屬座談會", cat: "family", date: new Date(y, m, d + 1), startH: 14, startM: 0, endH: 15, endM: 0, note: "", priority: "normal" },
+    { id: gid(), title: "品管指標月報", cat: "audit", date: new Date(y, m, d + 2), startH: 9, startM: 30, endH: 10, endM: 30, note: "", priority: "normal" },
+    { id: gid(), title: "個案討論會", cat: "family", date: new Date(y, m, d + 3), startH: 13, startM: 30, endH: 14, endM: 30, note: "", priority: "low" },
+    { id: gid(), title: "在職教育壓傷", cat: "training", date: new Date(y, m, d + 5), startH: 9, startM: 0, endH: 10, endM: 0, note: "", priority: "normal" },
+    { id: gid(), title: "SNQ準備會議", cat: "meeting", date: new Date(y, m, d - 1), startH: 14, startM: 0, endH: 15, endM: 30, note: "資料彙整", priority: "high" },
+    { id: gid(), title: "護理品質會議", cat: "meeting", date: new Date(y, m, d + 4), startH: 10, startM: 0, endH: 11, endM: 0, note: "", priority: "normal" },
+  ];
+}
+function initTd() {
+  return [
+    { id: gid(), text: "彙整本月品管指標數據", done: false, priority: "high", cat: "audit", dueDate: addD(new Date(), 2), recur: "" },
+    { id: gid(), text: "更新護理人力排班表", done: false, priority: "high", cat: "meeting", dueDate: addD(new Date(), 1), recur: "" },
+    { id: gid(), text: "準備SNQ簡報資料", done: false, priority: "normal", cat: "meeting", dueDate: addD(new Date(), 5), recur: "" },
+    { id: gid(), text: "感控稽核紀錄歸檔", done: true, priority: "normal", cat: "audit", dueDate: new Date(), recur: "" },
+    { id: gid(), text: "新進人員訓練簽到表", done: false, priority: "low", cat: "training", dueDate: addD(new Date(), 3), recur: "" },
+    { id: gid(), text: "晨間交班確認", done: false, priority: "high", cat: "meeting", dueDate: new Date(), recur: "daily" },
+    { id: gid(), text: "護理站環境稽核", done: false, priority: "normal", cat: "audit", dueDate: addD(new Date(), 3), recur: "weekly" },
+    { id: gid(), text: "品管指標月報提交", done: false, priority: "high", cat: "audit", dueDate: addD(new Date(), 10), recur: "monthly" },
+  ];
+}
+
+/* ═══════ JR SOUND LIBRARY ═══════ */
+let _audioCtx = null;
+function getAudioCtx() {
+  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return _audioCtx;
+}
+function playNote(ctx, freq, startTime, duration, vol = 0.25, type = "sine") {
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.connect(g); g.connect(ctx.destination);
+  o.frequency.value = freq; o.type = type;
+  g.gain.setValueAtTime(vol, startTime);
+  g.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+  o.start(startTime); o.stop(startTime + duration);
+}
+
+// 新幹線発車メロディー — Shinkansen departure melody (E-G#-A-B-E pattern)
+function playDeparture() {
+  try {
+    const c = getAudioCtx(), t = c.currentTime;
+    const notes = [659, 831, 880, 988, 1319, 988, 880, 831]; // E5-G#5-A5-B5-E6-B5-A5-G#5
+    const dur = 0.18, gap = 0.2;
+    notes.forEach((f, i) => { playNote(c, f, t + i * gap, dur, 0.2); });
+    // Harmony undertone
+    playNote(c, 330, t, notes.length * gap, 0.08, "triangle");
+  } catch (e) { /* ignore */ }
+}
+
+// 到着チャイム — Station arrival two-tone chime
+function playArrival() {
+  try {
+    const c = getAudioCtx(), t = c.currentTime;
+    playNote(c, 784, t, 0.35, 0.25);        // G5
+    playNote(c, 1047, t + 0.38, 0.55, 0.2);  // C6
+    playNote(c, 523, t, 0.35, 0.1, "triangle"); // C5 undertone
+  } catch (e) { /* ignore */ }
+}
+
+// 警告音 — Alert / conflict warning (rapid two-note)
+function playAlert() {
+  try {
+    const c = getAudioCtx(), t = c.currentTime;
+    for (let i = 0; i < 3; i++) {
+      playNote(c, 880, t + i * 0.3, 0.1, 0.3);  // A5
+      playNote(c, 698, t + i * 0.3 + 0.12, 0.1, 0.3); // F5
+    }
+  } catch (e) { /* ignore */ }
+}
+
+// 車内チャイム — In-car announcement chime (gentle 4-note)
+function playAnnouce() {
+  try {
+    const c = getAudioCtx(), t = c.currentTime;
+    const notes = [523, 659, 784, 1047]; // C5-E5-G5-C6
+    notes.forEach((f, i) => { playNote(c, f, t + i * 0.25, 0.35, 0.15); });
+  } catch (e) { /* ignore */ }
+}
+
+// 発車ベル — Departure bell (countdown warning)
+function playBell() {
+  try {
+    const c = getAudioCtx(), t = c.currentTime;
+    playNote(c, 1175, t, 0.15, 0.3);       // D6
+    playNote(c, 1175, t + 0.2, 0.15, 0.3); // D6
+    playNote(c, 1397, t + 0.45, 0.4, 0.25); // F6
+  } catch (e) { /* ignore */ }
+}
+
+/* ═══════ JR TTS ANNOUNCEMENT SYSTEM ═══════ */
+let _voiceReady = false;
+let _voices = [];
+function loadVoices() {
+  _voices = speechSynthesis.getVoices();
+  _voiceReady = _voices.length > 0;
+}
+if (typeof speechSynthesis !== "undefined") {
+  loadVoices();
+  speechSynthesis.onvoiceschanged = loadVoices;
+}
+
+function getChineseVoice() {
+  if (!_voices.length) loadVoices();
+  // Prefer zh-TW, then zh-CN, then any Chinese, then default
+  return _voices.find((v) => v.lang === "zh-TW") ||
+    _voices.find((v) => v.lang.startsWith("zh")) ||
+    _voices.find((v) => v.lang === "ja-JP") || // fallback to Japanese for JR feel
+    _voices[0] || null;
+}
+
+function speak(text, onEnd) {
+  if (typeof speechSynthesis === "undefined") return;
+  speechSynthesis.cancel(); // stop any current speech
+  const u = new SpeechSynthesisUtterance(text);
+  const voice = getChineseVoice();
+  if (voice) u.voice = voice;
+  u.lang = "zh-TW";
+  u.rate = 0.88; // slightly slower for clarity, like JR announcements
+  u.pitch = 1.05;
+  u.volume = 1;
+  if (onEnd) u.onend = onEnd;
+  speechSynthesis.speak(u);
+}
+
+// JR-style announcement templates
+function announce10min(ev) {
+  const c = gc(ev.cat);
+  const timeStr = p2(ev.startH) + "點" + (ev.startM > 0 ? p2(ev.startM) + "分" : "整");
+  const noteStr = ev.note ? "，地點：" + ev.note : "";
+  playAnnouce();
+  setTimeout(() => {
+    speak("各位同仁請注意。下一個行程「" + ev.title + "」，" +
+      c.label + "，預定" + timeStr + "開始" + noteStr +
+      "。距離開始還有十分鐘，請做好準備。");
+  }, 1200);
+}
+
+function announce5min(ev) {
+  const c = gc(ev.cat);
+  const noteStr = ev.note ? "，" + ev.note : "";
+  playDeparture();
+  setTimeout(() => {
+    speak("提醒您，「" + ev.title + "」即將在五分鐘後開始" + noteStr +
+      "。請儘速前往，謝謝。");
+  }, 1800);
+}
+
+function announceStart(ev) {
+  playBell();
+  setTimeout(() => {
+    speak("「" + ev.title + "」現在開始。");
+  }, 800);
+}
+
+function announceConflict(evA, evB) {
+  playAlert();
+  setTimeout(() => {
+    speak("注意，行程衝突警告。「" + evA.title + "」與「" + evB.title + "」時間重疊，請確認調整。");
+  }, 1000);
+}
+
+// Manual test: full station announcement
+function announceTest() {
+  playArrival();
+  setTimeout(() => {
+    speak("歡迎使用護理長行程管理系統。本系統搭載新幹線風格智能提醒，將以語音方式為您播報行程資訊。祝您工作順利。");
+  }, 1000);
+}
+
+/* ═══════ HOOKS ═══════ */
+function useRem(ev, td) {
+  return useMemo(() => {
+    const n = new Date(), nm = n.getHours() * 60 + n.getMinutes(), r = [];
+    const te = ev.filter((e) => sd(e.date, n)).sort((a, b) => (a.startH * 60 + a.startM) - (b.startH * 60 + b.startM));
+
+    // Upcoming within 60min
+    const upcoming = [];
+    te.forEach((e) => { const d = (e.startH * 60 + e.startM) - nm; if (d > 0 && d <= 60) upcoming.push({ ...e, _min: d }); });
+    if (upcoming.length) r.push({ t: upcoming.length + "件行程即將発車", c: JR.gYellow, icon: "⏱", items: upcoming.map((e) => ({ label: e.title, sub: e._min + "分後 · " + ft(e.startH, e.startM) + "発", cat: e.cat })) });
+
+    // Conflicts
+    const cfPairs = [];
+    for (let i = 0; i < te.length - 1; i++) { const a = te[i], b = te[i + 1]; if ((a.endH * 60 + a.endM) > (b.startH * 60 + b.startM)) cfPairs.push({ a, b }); }
+    if (cfPairs.length) r.push({ t: cfPairs.length + "組行程運行衝突", c: JR.gRed, icon: "⚠", items: cfPairs.map((p) => ({ label: "「" + p.a.title + "」↔「" + p.b.title + "」", sub: ft(p.a.startH, p.a.startM) + "–" + ft(p.a.endH, p.a.endM) + " ⇄ " + ft(p.b.startH, p.b.startM) + "–" + ft(p.b.endH, p.b.endM), cat: p.a.cat })) });
+
+    // Overdue todos
+    const od = td.filter((t) => !t.done && t.dueDate < new Date(n.getFullYear(), n.getMonth(), n.getDate()));
+    if (od.length) r.push({ t: od.length + "件待辦已延遲", c: JR.gRed, icon: "🔴", items: od.map((t) => ({ label: t.text, sub: "截止 " + fds(t.dueDate), cat: t.cat })) });
+
+    // High priority todos due today
+    const ht = td.filter((t) => !t.done && t.priority === "high" && sd(t.dueDate, n));
+    if (ht.length) r.push({ t: ht.length + "件急行待辦今日到期", c: JR.gOrange, icon: "🚨", items: ht.map((t) => ({ label: t.text, sub: gc(t.cat).label, cat: t.cat })) });
+
+    // Tomorrow events
+    const tmr = ev.filter((e) => sd(e.date, addD(n, 1))).sort((a, b) => (a.startH * 60 + a.startM) - (b.startH * 60 + b.startM));
+    if (tmr.length) r.push({ t: "明日" + tmr.length + "件行程待發", c: JR.blueG, icon: "📋", items: tmr.map((e) => ({ label: e.title, sub: ft(e.startH, e.startM) + "–" + ft(e.endH, e.endM), cat: e.cat })) });
+
+    // Busy day
+    if (te.length >= 5) r.push({ t: "今日運行密集（" + te.length + "件）注意時間分配", c: JR.gYellow, icon: "📊", items: [] });
+
+    return r;
+  }, [ev, td]);
+}
+
+function useCountdown(events) {
+  const [cd, setCd] = useState(null);
+  useEffect(() => {
+    const tick = () => {
+      const n = new Date(), nm = n.getHours() * 60 + n.getMinutes();
+      const te = events.filter((e) => sd(e.date, n)).sort((a, b) => (a.startH * 60 + a.startM) - (b.startH * 60 + b.startM));
+      const next = te.find((e) => (e.startH * 60 + e.startM) > nm);
+      if (next) { setCd({ title: next.title, cat: next.cat, min: (next.startH * 60 + next.startM) - nm }); } else { setCd(null); }
+    };
+    tick();
+    const t = setInterval(tick, 15000);
+    return () => clearInterval(t);
+  }, [events]);
+  return cd;
+}
+
+/* ═══════ SHARED COMPONENTS ═══════ */
+function SH({ title, sub, count, ac }) {
+  return (
+    <div style={{ background: JR.dark, padding: "10px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ width: 4, height: 20, background: ac || JR.blue }} />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: "#fff", letterSpacing: 1 }}>{title}</div>
+        {sub && <div style={{ fontSize: 9, color: JR.rail, letterSpacing: 2, marginTop: 1 }}>{sub}</div>}
+      </div>
+      {count !== undefined && <div style={{ background: JR.blue, color: "#fff", borderRadius: 4, padding: "3px 10px", fontSize: 12, fontWeight: 800 }}>{count}</div>}
+    </div>
+  );
+}
+
+function PB({ cat, sz = 28 }) {
+  const c = gc(cat);
+  return (
+    <div style={{ width: sz, height: sz, borderRadius: "50%", background: c.color, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: sz * 0.42, fontWeight: 900, flexShrink: 0 }}>{c.pl}</div>
+  );
+}
+
+const NB = { width: 32, height: 32, border: "2px solid " + JR.steel, background: JR.white, cursor: "pointer", fontSize: 13, fontWeight: 800, color: JR.blue, display: "flex", alignItems: "center", justifyContent: "center" };
+
+/* ═══════ FILTER BAR ═══════ */
+function FilterBar({ filters, setFilters }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 20px", background: JR.cream, borderBottom: "1px solid " + JR.steel, flexWrap: "wrap" }}>
+      <input value={filters.q} onChange={(e) => setFilters((p) => ({ ...p, q: e.target.value }))} placeholder="🔍 搜尋行程..." style={{ padding: "6px 12px", border: "1px solid " + JR.steel, background: "#fff", fontSize: 12, outline: "none", width: 160 }} />
+      {CATS.map((c) => {
+        const on = filters.cats.includes(c.id);
+        return (
+          <button key={c.id} onClick={() => setFilters((p) => ({ ...p, cats: on ? p.cats.filter((x) => x !== c.id) : [...p.cats, c.id] }))} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", border: "2px solid " + (on ? c.color : JR.steel), background: on ? c.color + "12" : "#fff", color: on ? c.color : JR.concrete, fontSize: 10, fontWeight: 800, cursor: "pointer" }}>
+            <PB cat={c.id} sz={14} />{c.label}
+          </button>
+        );
+      })}
+      {(filters.q || filters.cats.length < CATS.length) && <button onClick={() => setFilters({ q: "", cats: CATS.map((c) => c.id) })} style={{ padding: "4px 10px", border: "1px solid " + JR.rail, background: "transparent", color: JR.concrete, fontSize: 10, cursor: "pointer" }}>清除</button>}
+    </div>
+  );
+}
+
+/* ═══════ ROUTE MAP ═══════ */
+function RouteMap({ events, today, onEdit, expanded, setExpanded }) {
+  const te = events.filter((e) => sd(e.date, today)).sort((a, b) => (a.startH * 60 + a.startM) - (b.startH * 60 + b.startM));
+  const now = new Date(), nm = now.getHours() * 60 + now.getMinutes();
+
+  if (te.length === 0) return <div style={{ padding: 40, textAlign: "center", color: JR.concrete, fontSize: 13 }}>本日無運行予定</div>;
+
+  // Find current/next indices
+  let curIdx = -1, nextIdx = -1;
+  for (let i = 0; i < te.length; i++) {
+    const eS = te[i].startH * 60 + te[i].startM, eE = te[i].endH * 60 + te[i].endM;
+    if (nm >= eS && nm <= eE) curIdx = i;
+    if (nextIdx === -1 && eS > nm) nextIdx = i;
+  }
+  const nextEv = nextIdx >= 0 ? te[nextIdx] : null;
+  const nextMin = nextEv ? (nextEv.startH * 60 + nextEv.startM) - nm : 0;
+
+  // Conflict detection
+  const conflictAt = {};
+  for (let i = 0; i < te.length - 1; i++) {
+    if ((te[i].endH * 60 + te[i].endM) > (te[i + 1].startH * 60 + te[i + 1].startM)) conflictAt[i] = true;
+  }
+
+  const lineColor = JR.blue;
+  const STN = 48; // station circle area width
+
+  return (
+    <div style={{ padding: "12px 16px" }}>
+      {/* Next station indicator panel */}
+      {nextEv && (
+        <div style={{ background: JR.dark, padding: "10px 16px", marginBottom: 12, display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 10, color: JR.nozomi, fontWeight: 800, letterSpacing: 2, flexShrink: 0 }}>次は</div>
+          <div style={{ width: 2, height: 20, background: JR.nozomi, flexShrink: 0 }} />
+          <PB cat={nextEv.cat} sz={24} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 900, color: JR.white, letterSpacing: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nextEv.title}</div>
+            <div style={{ fontSize: 10, color: JR.blueG, marginTop: 1 }}>{ft(nextEv.startH, nextEv.startM)} 発 · {gc(nextEv.cat).label}{nextEv.note ? " · " + nextEv.note : ""}</div>
+          </div>
+          <div style={{ textAlign: "center", flexShrink: 0 }}>
+            <div style={{ fontSize: 28, fontWeight: 900, color: JR.nozomi, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{nextMin}</div>
+            <div style={{ fontSize: 9, color: JR.gYellow, fontWeight: 700 }}>分後</div>
+          </div>
+        </div>
+      )}
+      {curIdx >= 0 && (
+        <div style={{ background: lineColor + "10", border: "1px solid " + lineColor + "30", padding: "8px 16px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 10, height: 10, borderRadius: "50%", background: JR.gGreen, animation: "blink 1.2s infinite" }} />
+          <span style={{ fontSize: 12, fontWeight: 800, color: lineColor }}>運行中 — {te[curIdx].title}</span>
+          <span style={{ fontSize: 11, color: JR.concrete, marginLeft: "auto", fontVariantNumeric: "tabular-nums" }}>{ft(te[curIdx].startH, te[curIdx].startM)} → {ft(te[curIdx].endH, te[curIdx].endM)}</span>
+        </div>
+      )}
+
+      {/* Metro line map */}
+      <div style={{ overflowX: "auto", paddingBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", minWidth: te.length * 140 + 60, padding: "0 20px", position: "relative" }}>
+          {/* Direction label */}
+          <div style={{ position: "absolute", top: -2, left: 0, fontSize: 9, color: JR.concrete, fontWeight: 700 }}>始発</div>
+          <div style={{ position: "absolute", top: -2, right: 0, fontSize: 9, color: JR.concrete, fontWeight: 700 }}>終着 →</div>
+
+          {te.map((ev, i) => {
+            const c = gc(ev.cat);
+            const eS = ev.startH * 60 + ev.startM, eE = ev.endH * 60 + ev.endM;
+            const isPast = nm > eE, isCur = curIdx === i, isFuture = !isPast && !isCur;
+            const isExp = expanded === ev.id;
+            const hasConflict = conflictAt[i];
+
+            // Gap to next station
+            let gapMin = null;
+            if (i < te.length - 1) {
+              const nS = te[i + 1].startH * 60 + te[i + 1].startM;
+              gapMin = nS - eE;
+            }
+
+            return (
+              <div key={ev.id} style={{ display: "flex", alignItems: "center", flex: 1 }}>
+                {/* Station */}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: STN, flexShrink: 0, cursor: "pointer", position: "relative" }} onClick={() => setExpanded(isExp ? null : ev.id)}>
+                  {/* Time above */}
+                  <div style={{ fontSize: 10, fontWeight: 800, color: isCur ? lineColor : isPast ? JR.rail : JR.track, fontVariantNumeric: "tabular-nums", marginBottom: 4 }}>{ft(ev.startH, ev.startM)}</div>
+                  {/* Station dot */}
+                  <div style={{
+                    width: isCur ? 22 : 14, height: isCur ? 22 : 14, borderRadius: "50%",
+                    background: isPast ? JR.rail : isCur ? lineColor : "transparent",
+                    border: isPast ? "none" : isCur ? "3px solid " + lineColor : "3px solid " + c.color,
+                    boxShadow: isCur ? "0 0 0 4px " + lineColor + "25" : "none",
+                    transition: "all .3s", zIndex: 3,
+                  }} />
+                  {/* Current position triangle */}
+                  {isCur && <div style={{ width: 0, height: 0, borderLeft: "6px solid transparent", borderRight: "6px solid transparent", borderTop: "8px solid " + JR.gRed, marginTop: 2 }} />}
+                  {/* Station name below */}
+                  <div style={{ marginTop: isCur ? 2 : 10, textAlign: "center", maxWidth: 100 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 3, marginBottom: 2 }}>
+                      <PB cat={ev.cat} sz={14} />
+                      <span style={{ fontSize: 9, fontWeight: 800, color: isPast ? JR.rail : isCur ? lineColor : c.color }}>{PRI[ev.priority || "normal"].label}</span>
+                    </div>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: isPast ? JR.rail : JR.track, lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 100 }}>{ev.title}</div>
+                    <div style={{ fontSize: 9, color: isPast ? JR.rail : JR.concrete }}>{isPast ? "完了" : isCur ? "運行中" : "待発"}</div>
+                  </div>
+                  {/* Expanded card */}
+                  {isExp && (
+                    <div style={{ position: "absolute", top: "100%", marginTop: 4, left: "50%", transform: "translateX(-50%)", width: 180, background: "#fff", border: "2px solid " + c.color, borderTop: "3px solid " + c.color, padding: 10, zIndex: 20, boxShadow: "0 4px 16px rgba(0,0,0,.15)" }} onClick={(e) => e.stopPropagation()}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: JR.track, marginBottom: 4 }}>{ev.title}</div>
+                      <div style={{ fontSize: 10, color: JR.concrete, marginBottom: 2 }}>{ft(ev.startH, ev.startM)} → {ft(ev.endH, ev.endM)}（{eMin(ev)}分）</div>
+                      {ev.note && <div style={{ fontSize: 10, color: JR.track, marginBottom: 4 }}>📍 {ev.note}</div>}
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button onClick={() => onEdit(ev)} style={{ flex: 1, padding: "4px 0", border: "none", background: JR.blue, color: "#fff", fontSize: 10, fontWeight: 800, cursor: "pointer" }}>編集</button>
+                        <button onClick={() => onEdit({ ...ev, id: "", date: addD(ev.date, 7) })} style={{ flex: 1, padding: "4px 0", border: "1px solid " + JR.blue, background: "#fff", color: JR.blue, fontSize: 10, fontWeight: 800, cursor: "pointer" }}>複製</button>
+                      </div>
+                    </div>
+                  )}
+                  {hasConflict && <div style={{ position: "absolute", top: 10, right: -8, background: JR.gRed, color: "#fff", padding: "1px 4px", fontSize: 8, fontWeight: 900, borderRadius: 2, zIndex: 10 }}>!</div>}
+                </div>
+                {/* Track segment to next station */}
+                {i < te.length - 1 && (
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", position: "relative", minWidth: 50 }}>
+                    <div style={{ height: 4, width: "100%", background: isPast && nm > (te[i + 1].endH * 60 + te[i + 1].endM) ? JR.rail : isPast ? `linear-gradient(90deg, ${JR.rail}, ${lineColor})` : lineColor + "30", position: "relative", marginTop: 18 }}>
+                      {/* Animated train indicator on current segment */}
+                      {isCur && <div style={{ position: "absolute", right: -2, top: -4, width: 12, height: 12, background: lineColor, borderRadius: 2, transform: "rotate(45deg)" }} />}
+                    </div>
+                    {gapMin !== null && (
+                      <div style={{ fontSize: 9, fontWeight: 700, color: hasConflict ? JR.gRed : JR.concrete, marginTop: 4, background: hasConflict ? JR.gRed + "10" : "transparent", padding: hasConflict ? "1px 6px" : 0, borderRadius: 2 }}>
+                        {hasConflict ? "衝突!" : gapMin + "分"}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {/* Terminal arrow */}
+          <div style={{ width: 0, height: 0, borderTop: "8px solid transparent", borderBottom: "8px solid transparent", borderLeft: "12px solid " + lineColor + "30", marginLeft: 4, marginTop: -18, flexShrink: 0 }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════ MODAL with Conflict Detection ═══════ */
+function Modal({ event: ev, events = [], onSave, onDelete, onClose }) {
+  const isNew = !ev.id;
+  const [f, setF] = useState({
+    title: ev.title || "", cat: ev.cat || "meeting", priority: ev.priority || "normal",
+    date: ev.date ? ev.date.getFullYear() + "-" + p2(ev.date.getMonth() + 1) + "-" + p2(ev.date.getDate()) : "",
+    startH: ev.startH ?? 9, startM: ev.startM ?? 0, endH: ev.endH ?? 10, endM: ev.endM ?? 0, note: ev.note || "",
+  });
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const tos = [];
+  for (let h = 7; h <= 19; h++) for (let m = 0; m < 60; m += 30) tos.push({ h, m, l: ft(h, m) });
+
+  // ── Real-time conflict detection ──
+  const conflicts = useMemo(() => {
+    if (!f.date) return [];
+    const [y, mo, da] = f.date.split("-").map(Number);
+    const formDate = new Date(y, mo - 1, da);
+    const fStart = (+f.startH) * 60 + (+f.startM);
+    const fEnd = (+f.endH) * 60 + (+f.endM);
+    if (fEnd <= fStart) return [];
+    return events.filter((e) => {
+      if (ev.id && e.id === ev.id) return false; // exclude self when editing
+      if (!sd(e.date, formDate)) return false;
+      const eS = e.startH * 60 + e.startM, eE = e.endH * 60 + e.endM;
+      return fStart < eE && fEnd > eS; // overlap check
+    });
+  }, [f.date, f.startH, f.startM, f.endH, f.endM, events, ev.id]);
+
+  const save = () => {
+    if (!f.title.trim() || !f.date) return;
+    const [y, mo, da] = f.date.split("-").map(Number);
+    onSave({ ...ev, id: ev.id || gid(), title: f.title.trim(), cat: f.cat, priority: f.priority, date: new Date(y, mo - 1, da), startH: +f.startH, startM: +f.startM, endH: +f.endH, endM: +f.endM, note: f.note });
+  };
+  const mi = { width: "100%", padding: "10px 12px", borderRadius: 4, border: "2px solid " + JR.steel, background: "#fff", color: JR.track, fontSize: 14, outline: "none", boxSizing: "border-box", marginBottom: 14 };
+  const ml = { display: "block", fontSize: 10, fontWeight: 800, color: JR.blue, marginBottom: 4, letterSpacing: 2 };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: JR.snow, border: "3px solid " + JR.blue, width: 440, maxWidth: "94vw", overflow: "hidden", maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ background: JR.blue, padding: "12px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 15, fontWeight: 900, color: "#fff", letterSpacing: 2 }}>{isNew ? "新規登録" : "編集"}</span>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,.2)", border: "none", color: "#fff", fontSize: 16, cursor: "pointer", width: 28, height: 28, borderRadius: 4 }}>✕</button>
+        </div>
+        <div style={{ height: 4, background: "linear-gradient(90deg," + JR.nozomi + " 0%," + JR.nozomi + " 30%,transparent 30%,transparent 32%," + JR.nozomi + " 32%," + JR.nozomi + " 100%)" }} />
+        <div style={{ padding: 20 }}>
+          <label style={ml}>行程名稱 TITLE</label>
+          <input value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="輸入行程..." style={{ ...mi, borderColor: JR.blue, fontSize: 16, fontWeight: 700 }} autoFocus />
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={ml}>番線</label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 14 }}>
+                {CATS.map((c) => (<button key={c.id} onClick={() => set("cat", c.id)} style={{ padding: "7px 0", border: "2px solid " + (f.cat === c.id ? c.color : JR.steel), background: f.cat === c.id ? c.color + "10" : "#fff", color: f.cat === c.id ? c.color : JR.concrete, fontSize: 11, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><PB cat={c.id} sz={18} />{c.label}</button>))}
+              </div>
+            </div>
+            <div style={{ width: 100 }}>
+              <label style={ml}>種別</label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 14 }}>
+                {Object.entries(PRI).map(([k, v]) => (<button key={k} onClick={() => set("priority", k)} style={{ padding: "7px 0", border: "2px solid " + (f.priority === k ? v.color : JR.steel), background: f.priority === k ? v.color + "15" : "#fff", color: f.priority === k ? v.color : JR.concrete, fontSize: 11, fontWeight: 800, cursor: "pointer", letterSpacing: 2 }}>{v.label}</button>))}
+              </div>
+            </div>
+          </div>
+          <label style={ml}>日期</label>
+          <input type="date" value={f.date} onChange={(e) => set("date", e.target.value)} style={mi} />
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}><label style={ml}>発車</label><select value={f.startH + "-" + f.startM} onChange={(e) => { const [h, m] = e.target.value.split("-"); set("startH", +h); set("startM", +m); }} style={mi}>{tos.map((t) => <option key={"s" + t.h + t.m} value={t.h + "-" + t.m}>{t.l}</option>)}</select></div>
+            <div style={{ flex: 1 }}><label style={ml}>到着</label><select value={f.endH + "-" + f.endM} onChange={(e) => { const [h, m] = e.target.value.split("-"); set("endH", +h); set("endM", +m); }} style={mi}>{tos.map((t) => <option key={"e" + t.h + t.m} value={t.h + "-" + t.m}>{t.l}</option>)}</select></div>
+          </div>
+          {/* ── Conflict Warning ── */}
+          {conflicts.length > 0 && (
+            <div style={{ background: JR.gRed + "08", border: "2px solid " + JR.gRed, padding: "10px 14px", marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 16 }}>⚠️</span>
+                <span style={{ fontSize: 12, fontWeight: 900, color: JR.gRed, letterSpacing: 1 }}>運行衝突警告</span>
+              </div>
+              <div style={{ fontSize: 11, color: JR.track, marginBottom: 4 }}>此時段與以下行程重疊：</div>
+              {conflicts.map((ce) => {
+                const cc = gc(ce.cat);
+                return (
+                  <div key={ce.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", background: "#fff", marginBottom: 3, borderLeft: "3px solid " + cc.color }}>
+                    <PB cat={ce.cat} sz={18} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: JR.track, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ce.title}</div>
+                      <div style={{ fontSize: 10, color: JR.concrete, fontVariantNumeric: "tabular-nums" }}>{ft(ce.startH, ce.startM)} → {ft(ce.endH, ce.endM)}{ce.note ? " · " + ce.note : ""}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <label style={ml}>備註</label>
+          <input value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="地點、備忘..." style={mi} />
+          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+            <button onClick={save} style={{ flex: 1, padding: "11px 0", border: "none", background: JR.blue, color: "#fff", fontSize: 14, fontWeight: 900, cursor: "pointer", letterSpacing: 2 }}>{isNew ? "登 録" : "保 存"}</button>
+            {!isNew && <button onClick={() => onDelete(ev.id)} style={{ padding: "11px 16px", border: "2px solid " + JR.gRed, background: "#fff", color: JR.gRed, fontSize: 12, fontWeight: 800, cursor: "pointer" }}>削除</button>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════ TODO — Priority Groups + Recurring Tasks ═══════ */
+const RECUR_OPTS = [
+  { id: "", label: "單次" },
+  { id: "daily", label: "每日", icon: "🔄", days: 1 },
+  { id: "weekly", label: "每週", icon: "📅", days: 7 },
+  { id: "biweekly", label: "雙週", icon: "📅", days: 14 },
+  { id: "monthly", label: "每月", icon: "🗓", days: 30 },
+];
+const getRecur = (id) => RECUR_OPTS.find((r) => r.id === id) || RECUR_OPTS[0];
+
+function TodoP({ todos, setTodos }) {
+  const [inp, setInp] = useState("");
+  const [sc, setSc] = useState("meeting");
+  const [sp, setSp] = useState("normal");
+  const [sr, setSr] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+
+  const add = () => {
+    if (!inp.trim()) return;
+    setTodos((p) => [{ id: gid(), text: inp.trim(), done: false, priority: sp, cat: sc, dueDate: addD(new Date(), 1), recur: sr }, ...p]);
+    setInp(""); setSp("normal"); setSr("");
+  };
+
+  // Toggle: if recurring and completing, auto-create next occurrence
+  const toggle = (id) => {
+    setTodos((p) => {
+      const idx = p.findIndex((x) => x.id === id);
+      if (idx < 0) return p;
+      const t = p[idx];
+      const newDone = !t.done;
+      const updated = [...p];
+      updated[idx] = { ...t, done: newDone };
+      // Auto-regenerate recurring task
+      if (newDone && t.recur) {
+        const rc = getRecur(t.recur);
+        if (rc.days) {
+          updated.push({ ...t, id: gid(), done: false, dueDate: addD(t.dueDate, rc.days) });
+        }
+      }
+      return updated;
+    });
+  };
+
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const pending = todos.filter((t) => !t.done);
+  const done = todos.filter((t) => t.done);
+
+  // Group by priority
+  const groups = [
+    { key: "high", ...PRI.high, icon: "🔴", items: pending.filter((t) => t.priority === "high") },
+    { key: "normal", ...PRI.normal, icon: "🔵", items: pending.filter((t) => t.priority === "normal") },
+    { key: "low", ...PRI.low, icon: "⚪", items: pending.filter((t) => t.priority === "low") },
+  ];
+
+  const TodoRow = ({ t }) => {
+    const c = gc(t.cat), rc = getRecur(t.recur);
+    const overdue = !t.done && t.dueDate < todayStart;
+    const dueToday = !t.done && sd(t.dueDate, today);
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: overdue ? JR.gRed + "06" : "transparent" }}>
+        <button onClick={() => toggle(t.id)} style={{ width: 16, height: 16, border: "2px solid " + (t.done ? JR.gGreen : JR.rail), background: t.done ? JR.gGreen : "#fff", cursor: "pointer", flexShrink: 0, fontSize: 9, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>{t.done && "✓"}</button>
+        <PB cat={t.cat} sz={16} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: t.done ? JR.rail : JR.track, textDecoration: t.done ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.text}</div>
+          <div style={{ display: "flex", gap: 4, marginTop: 1, alignItems: "center", flexWrap: "wrap" }}>
+            {overdue && <span style={{ fontSize: 8, fontWeight: 900, color: JR.gRed, background: JR.gRed + "12", padding: "0 4px" }}>逾期</span>}
+            {dueToday && !overdue && <span style={{ fontSize: 8, fontWeight: 900, color: JR.gOrange, background: JR.gOrange + "12", padding: "0 4px" }}>今日</span>}
+            <span style={{ fontSize: 8, color: JR.concrete }}>{fds(t.dueDate)}</span>
+            {t.recur && <span style={{ fontSize: 8, fontWeight: 800, color: JR.blue, background: JR.blue + "10", padding: "0 4px" }}>{rc.icon} {rc.label}</span>}
+          </div>
+        </div>
+        <button onClick={() => setTodos((p) => p.filter((x) => x.id !== t.id))} style={{ background: "none", border: "none", color: JR.rail, cursor: "pointer", fontSize: 12, flexShrink: 0 }}>✕</button>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ background: "#fff", border: "2px solid " + JR.steel, overflow: "hidden" }}>
+      <SH title="待辦事項" sub="TODO" count={pending.length} ac={JR.gGreen} />
+
+      {/* Quick add bar */}
+      <div style={{ padding: "6px 10px", borderBottom: "1px solid " + JR.steel, background: JR.cream }}>
+        <div style={{ display: "flex", gap: 4 }}>
+          <input value={inp} onChange={(e) => setInp(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="新增待辦..." style={{ flex: 1, minWidth: 80, padding: "6px 8px", border: "1px solid " + JR.steel, background: "#fff", fontSize: 12, outline: "none" }} />
+          <button onClick={() => setShowAdd(!showAdd)} style={{ padding: "4px 8px", border: "1px solid " + JR.steel, background: showAdd ? JR.blue + "10" : "#fff", color: JR.blue, fontSize: 10, fontWeight: 800, cursor: "pointer" }}>⚙</button>
+          <button onClick={add} style={{ padding: "4px 12px", border: "none", background: JR.blue, color: "#fff", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>＋</button>
+        </div>
+        {/* Expanded options */}
+        {showAdd && (
+          <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {/* Priority */}
+            <div style={{ display: "flex", gap: 2 }}>
+              {Object.entries(PRI).map(([k, v]) => (
+                <button key={k} onClick={() => setSp(k)} style={{ padding: "3px 8px", border: "1.5px solid " + (sp === k ? v.color : JR.steel), background: sp === k ? v.color + "15" : "#fff", color: sp === k ? v.color : JR.concrete, fontSize: 9, fontWeight: 800, cursor: "pointer" }}>{v.label}</button>
+              ))}
+            </div>
+            <div style={{ width: 1, height: 16, background: JR.steel }} />
+            {/* Category */}
+            <select value={sc} onChange={(e) => setSc(e.target.value)} style={{ padding: "3px 4px", border: "1px solid " + JR.steel, fontSize: 9 }}>{CATS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
+            <div style={{ width: 1, height: 16, background: JR.steel }} />
+            {/* Recurrence */}
+            <div style={{ display: "flex", gap: 2 }}>
+              {RECUR_OPTS.map((r) => (
+                <button key={r.id} onClick={() => setSr(r.id)} style={{ padding: "3px 6px", border: "1.5px solid " + (sr === r.id ? JR.blue : JR.steel), background: sr === r.id ? JR.blue + "10" : "#fff", color: sr === r.id ? JR.blue : JR.concrete, fontSize: 9, fontWeight: 700, cursor: "pointer" }}>{r.icon || "—"} {r.label}</button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Priority-grouped list */}
+      <div style={{ maxHeight: 360, overflowY: "auto" }}>
+        {groups.map((g) => {
+          if (g.items.length === 0) return null;
+          return (
+            <div key={g.key}>
+              {/* Group header */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", background: g.color + "08", borderBottom: "1px solid " + g.color + "20", borderLeft: "3px solid " + g.color }}>
+                <span style={{ fontSize: 11 }}>{g.icon}</span>
+                <span style={{ fontSize: 10, fontWeight: 900, color: g.color, letterSpacing: 1 }}>{g.label}</span>
+                <span style={{ fontSize: 9, color: g.color, fontWeight: 700, marginLeft: "auto" }}>{g.items.length}件</span>
+              </div>
+              {g.items.sort((a, b) => a.dueDate - b.dueDate).map((t) => (
+                <div key={t.id} style={{ borderBottom: "1px solid " + JR.steel + "30" }}>
+                  <TodoRow t={t} />
+                </div>
+              ))}
+            </div>
+          );
+        })}
+        {/* Completed section */}
+        {done.length > 0 && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", background: JR.cream, borderBottom: "1px solid " + JR.steel + "40" }}>
+              <span style={{ fontSize: 10, fontWeight: 800, color: JR.concrete, letterSpacing: 1 }}>✓ 已完了</span>
+              <span style={{ fontSize: 9, color: JR.rail, marginLeft: "auto" }}>{done.length}件</span>
+            </div>
+            {done.slice(0, 5).map((t) => (
+              <div key={t.id} style={{ borderBottom: "1px solid " + JR.steel + "20", opacity: 0.4 }}>
+                <TodoRow t={t} />
+              </div>
+            ))}
+            {done.length > 5 && <div style={{ padding: "6px 10px", fontSize: 9, color: JR.concrete, textAlign: "center" }}>...其餘 {done.length - 5} 件已完了</div>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════ CHARTS ═══════ */
+function WeekCharts({ events, today }) {
+  const ws = sow(today), we = addD(ws, 7);
+  const weekEv = events.filter((e) => e.date >= ws && e.date < we);
+  const pieData = CATS.map((c) => ({ name: c.label, value: weekEv.filter((e) => e.cat === c.id).length, color: c.color })).filter((d) => d.value > 0);
+  const barData = Array.from({ length: 7 }, (_, i) => { const d = addD(ws, i); return { name: WD[d.getDay()], count: weekEv.filter((e) => sd(e.date, d)).length }; });
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ background: "#fff", border: "2px solid " + JR.steel, overflow: "hidden" }}>
+        <SH title="本週分佈" sub="CATEGORY" />
+        <div style={{ padding: 8, height: 150 }}>
+          {pieData.length === 0 ? <div style={{ textAlign: "center", color: JR.concrete, paddingTop: 50, fontSize: 12 }}>無資料</div> :
+            <ResponsiveContainer><PieChart><Pie data={pieData} cx="50%" cy="50%" outerRadius={50} innerRadius={25} dataKey="value" strokeWidth={2} stroke="#fff">
+              {pieData.map((d, i) => <Cell key={i} fill={d.color} />)}
+            </Pie><Tooltip formatter={(v, n) => [v + "件", n]} contentStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer>}
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: "0 8px 8px", flexWrap: "wrap" }}>
+          {pieData.map((d) => (<div key={d.name} style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: d.color }} />{d.name} {d.value}</div>))}
+        </div>
+      </div>
+      <div style={{ background: "#fff", border: "2px solid " + JR.steel, overflow: "hidden" }}>
+        <SH title="每日件數" sub="DAILY" />
+        <div style={{ padding: 8, height: 180 }}>
+          <ResponsiveContainer><BarChart data={barData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+            <XAxis dataKey="name" tick={{ fontSize: 10, fill: JR.concrete }} />
+            <YAxis tick={{ fontSize: 10, fill: JR.concrete }} allowDecimals={false} />
+            <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v) => [v + "件", "行程"]} />
+            <Bar dataKey="count" fill={JR.blueG} radius={[3, 3, 0, 0]} />
+          </BarChart></ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════ DAY VIEW with Time Needle + Drag ═══════ */
+function DayView({ events, today, viewDate, onEdit, onAdd, onUpdate, expanded, setExpanded }) {
+  const de = events.filter((e) => sd(e.date, viewDate));
+  const isToday = sd(viewDate, today);
+  const [now, setNow] = useState(new Date());
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 30000); return () => clearInterval(t); }, []);
+  const nm = now.getHours() * 60 + now.getMinutes();
+  const [drag, setDrag] = useState(null);
+
+  useEffect(() => {
+    if (!drag) return;
+    const move = (e) => {
+      const dy = e.clientY - drag.startY;
+      const dm = Math.round(dy / 25) * 30;
+      const newM = drag.origH * 60 + drag.origM + dm;
+      const h = Math.max(7, Math.min(18, Math.floor(newM / 60)));
+      const m = newM % 60 < 15 ? 0 : 30;
+      const dur = eMin(drag.ev);
+      onUpdate({ ...drag.ev, startH: h, startM: m, endH: Math.floor((h * 60 + m + dur) / 60), endM: (h * 60 + m + dur) % 60 });
+    };
+    const up = () => setDrag(null);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  }, [drag, onUpdate]);
+
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto", border: "2px solid " + JR.steel, position: "relative" }}>
+      {HOURS.map((h) => (
+        <div key={h} style={{ display: "flex", minHeight: 50, borderBottom: "1px solid " + JR.steel + "30" }}>
+          <div style={{ width: 50, fontSize: 11, color: JR.concrete, paddingTop: 2, textAlign: "right", paddingRight: 6, flexShrink: 0, fontVariantNumeric: "tabular-nums", fontWeight: 700, background: JR.cream, borderRight: "1px solid " + JR.steel + "40" }}>{p2(h)}:00</div>
+          <div style={{ flex: 1, position: "relative", cursor: "pointer", minHeight: 50 }} onClick={() => onAdd(viewDate, h)}>
+            {de.filter((e) => e.startH === h).map((ev) => {
+              const c = gc(ev.cat), isExp = expanded === ev.id;
+              return (
+                <div key={ev.id} style={{ position: "absolute", top: (ev.startM / 60) * 50, left: 0, right: 0, height: Math.max(28, (eMin(ev) / 60) * 50 - 1), background: c.color + "10", borderLeft: "4px solid " + c.color, cursor: "grab", zIndex: 2 }}
+                  onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDrag({ ev, startY: e.clientY, origH: ev.startH, origM: ev.startM }); }}
+                  onClick={(e) => { e.stopPropagation(); setExpanded(isExp ? null : ev.id); }}>
+                  <div style={{ padding: "3px 10px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <PB cat={ev.cat} sz={16} />
+                      <span style={{ fontSize: 12, fontWeight: 800, color: JR.track, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.title}</span>
+                      <span style={{ fontSize: 10, color: JR.concrete, fontVariantNumeric: "tabular-nums" }}>{ft(ev.startH, ev.startM)}→{ft(ev.endH, ev.endM)}</span>
+                    </div>
+                    {isExp && (
+                      <div style={{ marginTop: 4, fontSize: 11, borderTop: "1px solid " + JR.steel, paddingTop: 4 }}>
+                        {ev.note && <div style={{ color: JR.concrete, marginBottom: 3 }}>📍 {ev.note}</div>}
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <button onClick={(e) => { e.stopPropagation(); onEdit(ev); }} style={{ padding: "4px 10px", border: "none", background: JR.blue, color: "#fff", fontSize: 10, fontWeight: 800, cursor: "pointer" }}>編集</button>
+                          <button onClick={(e) => { e.stopPropagation(); onEdit({ ...ev, id: "", date: addD(ev.date, 7) }); }} style={{ padding: "4px 10px", border: "1px solid " + JR.blue, background: "#fff", color: JR.blue, fontSize: 10, fontWeight: 800, cursor: "pointer" }}>複製→下週</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      {/* Time needle */}
+      {isToday && nm >= 420 && nm <= 1140 && (
+        <div style={{ position: "absolute", left: 50, right: 0, top: ((nm - 420) / 60) * 50, zIndex: 10, pointerEvents: "none", display: "flex", alignItems: "center" }}>
+          <div style={{ width: 10, height: 10, borderRadius: "50%", background: JR.gRed, marginLeft: -5, boxShadow: "0 0 6px " + JR.gRed }} />
+          <div style={{ flex: 1, height: 2, background: JR.gRed, boxShadow: "0 0 4px " + JR.gRed }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════ MONTH HEATMAP ═══════ */
+function MonthHeat({ events, today, viewDate, onEdit, onAdd }) {
+  const y = viewDate.getFullYear(), m = viewDate.getMonth(), f2 = new Date(y, m, 1).getDay(), dm2 = dim(y, m);
+  const cells = [];
+  for (let i = 0; i < f2; i++) cells.push(null);
+  for (let d = 1; d <= dm2; d++) cells.push(d);
+
+  return (
+    <div style={{ border: "2px solid " + JR.steel }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>{WD.map((w) => <div key={w} style={{ padding: "8px 0", textAlign: "center", fontSize: 11, fontWeight: 800, color: JR.blue, background: JR.cream, borderBottom: "2px solid " + JR.steel, letterSpacing: 2 }}>{w}</div>)}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
+        {cells.map((d, i) => {
+          const cd = d ? new Date(y, m, d) : null;
+          const de = cd ? events.filter((e) => sd(e.date, cd)) : [];
+          const it = cd && sd(cd, today);
+          const catCounts = CATS.map((c) => ({ ...c, n: de.filter((e) => e.cat === c.id).length })).filter((c) => c.n > 0);
+          return (
+            <div key={i} onClick={() => cd && onAdd(cd)} style={{ minHeight: 80, padding: 4, cursor: d ? "pointer" : "default", background: it ? JR.blue + "08" : "#fff", borderRight: "1px solid " + JR.steel + "40", borderBottom: "1px solid " + JR.steel + "40" }}
+              onMouseEnter={(e) => { if (d && !it) e.currentTarget.style.background = JR.cream; }} onMouseLeave={(e) => { if (d && !it) e.currentTarget.style.background = "#fff"; }}>
+              {d && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: 12, fontWeight: it ? 900 : 600, color: it ? JR.blue : JR.track }}>{it && <span style={{ background: JR.blue, color: "#fff", padding: "0 5px", fontSize: 9, fontWeight: 900, marginRight: 3 }}>今</span>}{d}</span>
+                    {de.length > 0 && <span style={{ fontSize: 9, fontWeight: 800, color: JR.blue, background: JR.blue + "12", padding: "0 5px", borderRadius: 2 }}>{de.length}</span>}
+                  </div>
+                  {catCounts.length > 0 && <div style={{ display: "flex", gap: 1, marginTop: 3, height: 4 }}>{catCounts.map((c) => <div key={c.id} style={{ flex: c.n, background: c.color, borderRadius: 1, minWidth: 3 }} />)}</div>}
+                  {de.slice(0, 2).map((ev) => (<div key={ev.id} onClick={(e) => { e.stopPropagation(); onEdit(ev); }} style={{ fontSize: 9, fontWeight: 700, color: gc(ev.cat).color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2, cursor: "pointer" }}>{ev.title}</div>))}
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════ CALENDAR ═══════ */
+function CalendarView({ events, today, onEdit, onAdd, onUpdate, calSub, setCalSub, viewDate, setViewDate, expanded, setExpanded }) {
+  const y = viewDate.getFullYear(), m = viewDate.getMonth();
+  const nav = (dir) => { if (calSub === "month") setViewDate(new Date(y, m + dir, 1)); else setViewDate(addD(viewDate, dir)); };
+  const title = calSub === "month" ? "民國" + roc(viewDate) + "年 " + p2(m + 1) + "月" : fd(viewDate) + " 星期" + WD[viewDate.getDay()];
+
+  return (
+    <div style={{ padding: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex" }}>
+          {["month", "day"].map((v) => (<button key={v} onClick={() => setCalSub(v)} style={{ padding: "7px 18px", border: "2px solid " + JR.blue, background: calSub === v ? JR.blue : "#fff", color: calSub === v ? "#fff" : JR.blue, fontSize: 12, fontWeight: 800, cursor: "pointer" }}>{v === "month" ? "月" : "日"}</button>))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}><button onClick={() => nav(-1)} style={NB}>◁</button><span style={{ fontSize: 14, fontWeight: 900, color: JR.track, minWidth: 200, textAlign: "center" }}>{title}</span><button onClick={() => nav(1)} style={NB}>▷</button></div>
+      </div>
+      {calSub === "month" && <MonthHeat events={events} today={today} viewDate={viewDate} onEdit={onEdit} onAdd={onAdd} />}
+      {calSub === "day" && <DayView events={events} today={today} viewDate={viewDate} onEdit={onEdit} onAdd={onAdd} onUpdate={onUpdate} expanded={expanded} setExpanded={setExpanded} />}
+    </div>
+  );
+}
+
+/* ═══════ TIMETABLE — Vertical Metro Station Style ═══════ */
+function GanttView({ events, today, onEdit, viewDate, setViewDate, expanded, setExpanded }) {
+  const de = events.filter((e) => sd(e.date, viewDate)).sort((a, b) => (a.startH * 60 + a.startM) - (b.startH * 60 + b.startM));
+  const isToday = sd(viewDate, today);
+  const now = new Date(), nm = now.getHours() * 60 + now.getMinutes();
+
+  // Conflicts
+  const conflictSet = new Set();
+  for (let i = 0; i < de.length; i++) for (let j = i + 1; j < de.length; j++) {
+    if ((de[i].endH * 60 + de[i].endM) > (de[j].startH * 60 + de[j].startM)) { conflictSet.add(de[i].id); conflictSet.add(de[j].id); }
+  }
+
+  // Find current/next
+  let curIdx = -1, nextIdx = -1;
+  for (let i = 0; i < de.length; i++) {
+    const eS = de[i].startH * 60 + de[i].startM, eE = de[i].endH * 60 + de[i].endM;
+    if (nm >= eS && nm <= eE) curIdx = i;
+    if (nextIdx === -1 && eS > nm) nextIdx = i;
+  }
+
+  return (
+    <div style={{ padding: 20, maxWidth: 640, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => setViewDate(addD(viewDate, -1))} style={NB}>◁</button>
+          <span style={{ fontSize: 14, fontWeight: 900, color: JR.track, minWidth: 200, textAlign: "center" }}>{fd(viewDate)} 星期{WD[viewDate.getDay()]}</span>
+          <button onClick={() => setViewDate(addD(viewDate, 1))} style={NB}>▷</button>
+        </div>
+        {isToday && <div style={{ fontSize: 10, fontWeight: 800, color: JR.blue, background: JR.blue + "10", padding: "4px 12px" }}>TODAY</div>}
+      </div>
+
+      {de.length === 0 ? <div style={{ padding: 60, textAlign: "center", color: JR.concrete, fontSize: 13 }}>此日無運行予定</div> : (
+        <div style={{ position: "relative" }}>
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <div style={{ width: 70 }} />
+            <div style={{ width: 16, display: "flex", justifyContent: "center" }}>
+              <div style={{ width: 8, height: 2, background: JR.blue }} />
+            </div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: JR.blue, letterSpacing: 2 }}>始発 FIRST</div>
+          </div>
+
+          {de.map((ev, i) => {
+            const c = gc(ev.cat), p = PRI[ev.priority || "normal"];
+            const eS = ev.startH * 60 + ev.startM, eE = ev.endH * 60 + ev.endM;
+            const dur = eE - eS;
+            const isPast = nm > eE, isCur = curIdx === i, isNext = nextIdx === i;
+            const hasCf = conflictSet.has(ev.id);
+            const isExp = expanded === ev.id;
+
+            // Gap to next
+            let gapMin = null;
+            if (i < de.length - 1) {
+              gapMin = (de[i + 1].startH * 60 + de[i + 1].startM) - eE;
+            }
+
+            return (
+              <div key={ev.id}>
+                {/* Station row */}
+                <div style={{ display: "flex", gap: 0, cursor: "pointer", opacity: isPast ? 0.45 : 1, transition: "opacity .2s" }} onClick={() => setExpanded(isExp ? null : ev.id)}>
+                  {/* Time column */}
+                  <div style={{ width: 70, textAlign: "right", paddingRight: 10, paddingTop: 2, flexShrink: 0 }}>
+                    <div style={{ fontSize: 16, fontWeight: 900, color: isCur ? JR.blue : isPast ? JR.rail : JR.track, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{ft(ev.startH, ev.startM)}</div>
+                    <div style={{ fontSize: 10, color: JR.concrete, marginTop: 2 }}>{ft(ev.endH, ev.endM)}</div>
+                  </div>
+
+                  {/* Track + station dot */}
+                  <div style={{ width: 16, display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                    <div style={{
+                      width: isCur ? 18 : isNext ? 14 : 12, height: isCur ? 18 : isNext ? 14 : 12, borderRadius: "50%", flexShrink: 0,
+                      background: isPast ? JR.rail : isCur ? JR.blue : "transparent",
+                      border: isPast ? "none" : isCur ? "none" : "3px solid " + c.color,
+                      boxShadow: isCur ? "0 0 0 4px " + JR.blue + "25" : isNext ? "0 0 0 3px " + c.color + "20" : "none",
+                    }} />
+                    {/* Vertical track line */}
+                    <div style={{ width: 3, flex: 1, background: isPast ? JR.rail : JR.blue + "30", minHeight: 10 }} />
+                  </div>
+
+                  {/* Content */}
+                  <div style={{ flex: 1, paddingLeft: 10, paddingBottom: 6 }}>
+                    {/* Title row */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                      <PB cat={ev.cat} sz={22} />
+                      <span style={{ fontSize: 14, fontWeight: 900, color: isPast ? JR.rail : JR.track, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.title}</span>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: p.color, background: p.color + "12", padding: "2px 8px", flexShrink: 0, letterSpacing: 1 }}>{p.label}</span>
+                      {hasCf && <span style={{ fontSize: 9, background: JR.gRed, color: "#fff", padding: "2px 6px", fontWeight: 900, flexShrink: 0 }}>衝突</span>}
+                    </div>
+
+                    {/* Duration bar */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <div style={{ flex: 1, maxWidth: 200, height: 6, background: JR.steel, borderRadius: 1, overflow: "hidden" }}>
+                        <div style={{ width: isCur ? Math.min(100, ((nm - eS) / dur) * 100) + "%" : isPast ? "100%" : "0%", height: "100%", background: c.color, transition: "width .5s", borderRadius: 1 }} />
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: isCur ? JR.blue : JR.concrete, fontVariantNumeric: "tabular-nums" }}>{dur}分</span>
+                      {isCur && <span style={{ fontSize: 9, fontWeight: 800, color: JR.gGreen, letterSpacing: 1 }}>● 運行中</span>}
+                      {isNext && <span style={{ fontSize: 9, fontWeight: 800, color: JR.gYellow }}>次の停車</span>}
+                      {isPast && <span style={{ fontSize: 9, color: JR.rail }}>完了</span>}
+                    </div>
+
+                    {/* Note */}
+                    {ev.note && <div style={{ fontSize: 10, color: JR.concrete, marginBottom: 2 }}>📍 {ev.note}</div>}
+
+                    {/* Expanded actions */}
+                    {isExp && (
+                      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                        <button onClick={(e) => { e.stopPropagation(); onEdit(ev); }} style={{ padding: "5px 14px", border: "none", background: JR.blue, color: "#fff", fontSize: 10, fontWeight: 800, cursor: "pointer" }}>編集</button>
+                        <button onClick={(e) => { e.stopPropagation(); onEdit({ ...ev, id: "", date: addD(ev.date, 7) }); }} style={{ padding: "5px 14px", border: "1px solid " + JR.blue, background: "#fff", color: JR.blue, fontSize: 10, fontWeight: 800, cursor: "pointer" }}>複製→下週</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Gap between stations */}
+                {gapMin !== null && (
+                  <div style={{ display: "flex", gap: 0, paddingLeft: 70, marginBottom: 2 }}>
+                    <div style={{ width: 16, display: "flex", justifyContent: "center", flexShrink: 0 }}>
+                      <div style={{ width: 3, height: 28, background: gapMin < 0 ? JR.gRed + "50" : JR.blue + "15" }} />
+                    </div>
+                    <div style={{ paddingLeft: 10, display: "flex", alignItems: "center", height: 28 }}>
+                      {gapMin < 0 ? (
+                        <span style={{ fontSize: 9, fontWeight: 800, color: JR.gRed, background: JR.gRed + "10", padding: "2px 8px" }}>⚠ 衝突重疊 {Math.abs(gapMin)}分</span>
+                      ) : gapMin === 0 ? (
+                        <span style={{ fontSize: 9, color: JR.concrete }}>── 直達 ──</span>
+                      ) : (
+                        <span style={{ fontSize: 9, color: JR.concrete }}>── 空檔 {gapMin}分 ──</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Footer */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+            <div style={{ width: 70 }} />
+            <div style={{ width: 16, display: "flex", justifyContent: "center" }}>
+              <div style={{ width: 8, height: 2, background: JR.blue }} />
+            </div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: JR.blue, letterSpacing: 2 }}>終着 LAST</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════ KANBAN ═══════ */
+function KanbanView({ events, today, onEdit, onAdd }) {
+  const up = events.filter((e) => e.date >= new Date(today.getFullYear(), today.getMonth(), today.getDate())).sort((a, b) => a.date - b.date);
+  return (
+    <div style={{ padding: 20, overflowX: "auto" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(" + CATS.length + ", minmax(220px,1fr))", gap: 12 }}>
+        {CATS.map((cat) => {
+          const items = up.filter((e) => e.cat === cat.id);
+          return (
+            <div key={cat.id} style={{ background: "#fff", border: "2px solid " + JR.steel, overflow: "hidden" }}>
+              <div style={{ background: cat.color, padding: "10px 14px", display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 26, height: 26, borderRadius: "50%", background: "rgba(255,255,255,.25)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 900 }}>{cat.pl}</div>
+                <span style={{ flex: 1, fontSize: 12, fontWeight: 900, color: "#fff" }}>{cat.label}</span>
+                <span style={{ background: "rgba(255,255,255,.25)", borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 900, color: "#fff" }}>{items.length}</span>
+              </div>
+              <div style={{ padding: 6, display: "flex", flexDirection: "column", gap: 4, minHeight: 160 }}>
+                {items.map((ev) => (
+                  <div key={ev.id} onClick={() => onEdit(ev)} style={{ background: JR.cream, padding: 8, cursor: "pointer", borderLeft: "4px solid " + cat.color, transition: "transform .1s" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.transform = "translateX(3px)"; }} onMouseLeave={(e) => { e.currentTarget.style.transform = "translateX(0)"; }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: JR.track }}>{ev.title}</div>
+                    <div style={{ fontSize: 9, color: JR.concrete, marginTop: 2 }}>{fd(ev.date)} · {ft(ev.startH, ev.startM)}→{ft(ev.endH, ev.endM)}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ padding: 6 }}><button onClick={() => onAdd(today, null, cat.id)} style={{ width: "100%", padding: 7, border: "2px dashed " + JR.rail, background: "transparent", color: JR.concrete, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>＋ 新規</button></div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════ DASHBOARD ═══════ */
+/* ═══════ REMINDER GROUP — Expandable Item List ═══════ */
+function ReminderGroup({ rem }) {
+  const [open, setOpen] = useState(false);
+  const hasItems = rem.items && rem.items.length > 0;
+  return (
+    <div style={{ borderBottom: "1px solid " + JR.steel + "40" }}>
+      {/* Header row */}
+      <div onClick={() => hasItems && setOpen(!open)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: hasItems ? "pointer" : "default", transition: "background .12s" }}
+        onMouseEnter={(e) => { if (hasItems) e.currentTarget.style.background = JR.cream; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+        <span style={{ fontSize: 14, flexShrink: 0 }}>{rem.icon || "●"}</span>
+        <span style={{ fontSize: 12, color: rem.c, fontWeight: 700, flex: 1 }}>{rem.t}</span>
+        {hasItems && <span style={{ fontSize: 10, color: JR.concrete, transition: "transform .2s", transform: open ? "rotate(180deg)" : "rotate(0deg)" }}>▾</span>}
+      </div>
+      {/* Expanded item list */}
+      {open && hasItems && (
+        <div style={{ padding: "0 12px 8px 36px" }}>
+          {rem.items.map((item, j) => (
+            <div key={j} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", background: "#fff", border: "1px solid " + JR.steel + "60", borderLeft: "3px solid " + gc(item.cat).color, marginBottom: 3 }}>
+              <PB cat={item.cat} sz={16} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: JR.track, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</div>
+                <div style={{ fontSize: 9, color: JR.concrete }}>{item.sub}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Dashboard({ events, today, todos, setTodos, onEdit, onAdd, reminders, expanded, setExpanded, isMobile }) {
+  const countdown = useCountdown(events);
+  const catStats = CATS.map((c) => ({ ...c, count: events.filter((e) => { const ws = sow(today), we = addD(ws, 7); return e.cat === c.id && e.date >= ws && e.date < we; }).length }));
+
+  return (
+    <div style={{ padding: isMobile ? 12 : 20, maxWidth: 1200, margin: "0 auto" }}>
+      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={{ background: JR.dark, padding: isMobile ? "12px 14px" : "16px 24px", flex: "1 1 300px", display: "flex", alignItems: isMobile ? "flex-start" : "center", justifyContent: "space-between", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 10 : 0 }}>
+          <div>
+            <div style={{ fontSize: 9, color: JR.rail, letterSpacing: 3 }}>REPUBLIC OF CHINA</div>
+            <div style={{ fontSize: isMobile ? 28 : 34, fontWeight: 900, color: "#fff", letterSpacing: 2, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{p2(today.getMonth() + 1)}<span style={{ fontSize: isMobile ? 14 : 18, color: JR.blueG }}>月</span>{p2(today.getDate())}<span style={{ fontSize: isMobile ? 14 : 18, color: JR.blueG }}>日</span></div>
+            <div style={{ fontSize: 11, color: JR.blueG, fontWeight: 700, marginTop: 2 }}>民國{roc(today)}年　星期{WD[today.getDay()]}</div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, width: isMobile ? "100%" : "auto" }}>
+            {catStats.map((c) => (<div key={c.id} style={{ textAlign: "center", padding: isMobile ? "6px 8px" : "6px 12px", background: c.color + "15", borderTop: "3px solid " + c.color }}><div style={{ fontSize: isMobile ? 18 : 22, fontWeight: 900, color: c.color, lineHeight: 1 }}>{c.count}</div><div style={{ fontSize: 8, color: JR.rail, fontWeight: 700, marginTop: 2 }}>{c.label}</div></div>))}
+          </div>
+        </div>
+        {countdown && (
+          <div style={{ background: JR.dark, padding: "14px 20px", flex: isMobile ? "1 1 100%" : "0 0 200px", display: "flex", flexDirection: isMobile ? "row" : "column", justifyContent: "center", alignItems: "center", gap: isMobile ? 12 : 0 }}>
+            <div style={{ fontSize: 9, color: JR.rail, letterSpacing: 2, marginBottom: isMobile ? 0 : 6 }}>次の発車まで</div>
+            <div style={{ fontSize: isMobile ? 28 : 36, fontWeight: 900, color: JR.nozomi, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{countdown.min}<span style={{ fontSize: 14, color: JR.gYellow }}>分</span></div>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: isMobile ? 0 : 6 }}><PB cat={countdown.cat} sz={14} /><span style={{ fontSize: 10, color: "#fff", fontWeight: 600, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{countdown.title}</span></div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ background: "#fff", border: "2px solid " + JR.steel, overflow: "hidden", marginBottom: 16 }}>
+        <SH title="本日運行路線" sub="ROUTE MAP" />
+        <RouteMap events={events} today={today} onEdit={onEdit} expanded={expanded} setExpanded={setExpanded} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 300px", gap: 16 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <WeekCharts events={events} today={today} />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ background: "#fff", border: "2px solid " + (reminders.length ? JR.gYellow : JR.steel), overflow: "hidden" }}>
+            <SH title="智能提醒" sub="ALERT" count={reminders.length} ac={reminders.length ? JR.gYellow : JR.gGreen} />
+            {reminders.length === 0 ? <div style={{ padding: 16, textAlign: "center", color: JR.concrete, fontSize: 12 }}>全線正常運行 ✓</div> :
+              reminders.map((r, i) => (<ReminderGroup key={i} rem={r} />))}
+          </div>
+          <TodoP todos={todos} setTodos={setTodos} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════ CATEGORY SETTINGS MODAL ═══════ */
+function CatSettings({ cats, setCats, onClose }) {
+  const [editId, setEditId] = useState(null);
+  const [editLabel, setEditLabel] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const [newColor, setNewColor] = useState(COLOR_PALETTE[0]);
+
+  const startEdit = (c) => { setEditId(c.id); setEditLabel(c.label); };
+  const saveEdit = () => {
+    if (!editLabel.trim()) return;
+    setCats((p) => p.map((c) => c.id === editId ? { ...c, label: editLabel.trim() } : c));
+    setEditId(null);
+  };
+  const changeColor = (id, color) => setCats((p) => p.map((c) => c.id === id ? { ...c, color } : c));
+  const addCat = () => {
+    if (!newLabel.trim()) return;
+    const newId = "cat_" + gid();
+    const pl = String(cats.length + 1);
+    setCats((p) => [...p, { id: newId, label: newLabel.trim(), pl, color: newColor }]);
+    setNewLabel("");
+  };
+  const delCat = (id) => {
+    if (cats.length <= 1) return;
+    setCats((p) => p.filter((c) => c.id !== id).map((c, i) => ({ ...c, pl: String(i + 1) })));
+  };
+
+  const mi = { padding: "8px 12px", border: "2px solid " + JR.steel, background: "#fff", color: JR.track, fontSize: 13, outline: "none", boxSizing: "border-box", flex: 1, minWidth: 0 };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: JR.snow, border: "3px solid " + JR.blue, width: 480, maxWidth: "94vw", overflow: "hidden", maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ background: JR.blue, padding: "12px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 15, fontWeight: 900, color: "#fff", letterSpacing: 2 }}>番線設定</span>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,.2)", border: "none", color: "#fff", fontSize: 16, cursor: "pointer", width: 28, height: 28, borderRadius: 4 }}>✕</button>
+        </div>
+        <div style={{ height: 4, background: "linear-gradient(90deg," + JR.nozomi + " 0%," + JR.nozomi + " 30%,transparent 30%,transparent 32%," + JR.nozomi + " 32%," + JR.nozomi + " 100%)" }} />
+        <div style={{ padding: 20 }}>
+          {/* Existing categories */}
+          <div style={{ fontSize: 10, fontWeight: 800, color: JR.blue, letterSpacing: 2, marginBottom: 8 }}>現有番線 PLATFORMS</div>
+          {cats.map((c, i) => (
+            <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid " + JR.steel + "60" }}>
+              <div style={{ width: 28, height: 28, borderRadius: "50%", background: c.color, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 12, fontWeight: 900, flexShrink: 0 }}>{c.pl}</div>
+              {editId === c.id ? (
+                <div style={{ flex: 1, display: "flex", gap: 4 }}>
+                  <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveEdit()} style={mi} autoFocus />
+                  <button onClick={saveEdit} style={{ padding: "6px 12px", border: "none", background: JR.blue, color: "#fff", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>保存</button>
+                </div>
+              ) : (
+                <span onClick={() => startEdit(c)} style={{ flex: 1, fontSize: 13, fontWeight: 700, color: JR.track, cursor: "pointer" }}>{c.label}</span>
+              )}
+              {/* Color picker */}
+              <div style={{ display: "flex", gap: 2, flexWrap: "wrap", maxWidth: 120 }}>
+                {COLOR_PALETTE.slice(0, 6).map((clr) => (
+                  <div key={clr} onClick={() => changeColor(c.id, clr)} style={{ width: 16, height: 16, borderRadius: 3, background: clr, cursor: "pointer", border: c.color === clr ? "2px solid " + JR.track : "2px solid transparent" }} />
+                ))}
+              </div>
+              {cats.length > 1 && <button onClick={() => delCat(c.id)} style={{ background: "none", border: "none", color: JR.gRed, cursor: "pointer", fontSize: 14, flexShrink: 0 }}>✕</button>}
+            </div>
+          ))}
+
+          {/* Add new */}
+          <div style={{ fontSize: 10, fontWeight: 800, color: JR.blue, letterSpacing: 2, marginTop: 16, marginBottom: 8 }}>新增番線 NEW PLATFORM</div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input value={newLabel} onChange={(e) => setNewLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addCat()} placeholder="類別名稱..." style={mi} />
+            <div style={{ display: "flex", gap: 2 }}>
+              {COLOR_PALETTE.map((clr) => (
+                <div key={clr} onClick={() => setNewColor(clr)} style={{ width: 18, height: 18, borderRadius: 3, background: clr, cursor: "pointer", border: newColor === clr ? "2px solid " + JR.track : "2px solid transparent" }} />
+              ))}
+            </div>
+            <button onClick={addCat} style={{ padding: "8px 16px", border: "none", background: JR.blue, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer", flexShrink: 0 }}>＋ 追加</button>
+          </div>
+
+          {/* Sound test */}
+          <div style={{ fontSize: 10, fontWeight: 800, color: JR.blue, letterSpacing: 2, marginTop: 20, marginBottom: 8 }}>音效測試 SOUND TEST</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {[
+              { fn: playDeparture, label: "🚄 発車メロディー" },
+              { fn: playArrival, label: "🔔 到着チャイム" },
+              { fn: playAlert, label: "⚠️ 警告音" },
+              { fn: playAnnouce, label: "📢 車内チャイム" },
+              { fn: playBell, label: "🔊 発車ベル" },
+            ].map((s) => (
+              <button key={s.label} onClick={s.fn} style={{ padding: "8px 14px", border: "2px solid " + JR.steel, background: JR.cream, color: JR.track, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{s.label}</button>
+            ))}
+          </div>
+          {/* Voice announcement test */}
+          <div style={{ fontSize: 10, fontWeight: 800, color: JR.blue, letterSpacing: 2, marginTop: 16, marginBottom: 8 }}>語音播報測試 VOICE TEST</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {[
+              { fn: announceTest, label: "🎙 系統歡迎詞" },
+              { fn: () => announce10min({ title: "護理部主管會議", cat: "meeting", startH: 10, startM: 0, note: "3F大會議室" }), label: "📢 10分前播報" },
+              { fn: () => announce5min({ title: "感控月稽核", cat: "audit", startH: 14, startM: 0, note: "2F護理站" }), label: "🚄 5分前播報" },
+              { fn: () => announceStart({ title: "新人CPR訓練" }), label: "🔔 開始播報" },
+              { fn: () => announceConflict({ title: "院務會議" }, { title: "家屬座談" }), label: "⚠️ 衝突播報" },
+            ].map((s) => (
+              <button key={s.label} onClick={s.fn} style={{ padding: "8px 14px", border: "2px solid " + JR.nozomi, background: JR.nozomi + "15", color: JR.track, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{s.label}</button>
+            ))}
+          </div>
+          <div style={{ fontSize: 9, color: JR.concrete, marginTop: 8, lineHeight: 1.6 }}>
+            💡 語音播報需瀏覽器支援 Web Speech API（Chrome/Safari/Edge）<br/>
+            📱 手機首次使用請先點任一按鈕啟用音頻權限
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════ APP ═══════ */
+function App() {
+  const [events, setEvents] = useState(initEv);
+  const [todos, setTodos] = useState(initTd);
+  const [cats, setCats] = useState([...DEFAULT_CATS]);
+  const [view, setView] = useState("dashboard");
+  const [calSub, setCalSub] = useState("month");
+  const [viewDate, setViewDate] = useState(new Date());
+  const [modal, setModal] = useState(null);
+  const [showCatSettings, setShowCatSettings] = useState(false);
+  const [time, setTime] = useState(new Date());
+  const [expanded, setExpanded] = useState(null);
+  const [filters, setFilters] = useState({ q: "", cats: DEFAULT_CATS.map((c) => c.id) });
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [showFilter, setShowFilter] = useState(false);
+  const [voiceOn, setVoiceOn] = useState(() => { try { return localStorage.getItem("voiceOn") !== "false"; } catch(e) { return true; } });
+
+  // Sync module-level CATS for gc() function
+  useEffect(() => { CATS = cats; }, [cats]);
+
+  const today = new Date();
+  const reminders = useRem(events, todos);
+
+  useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
+  useEffect(() => { const h = () => setIsMobile(window.innerWidth < 768); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
+
+  useEffect(() => {
+    let lastChime = "";
+    const t = setInterval(() => {
+      const n = new Date(), nm = n.getHours() * 60 + n.getMinutes();
+      const todayEv = events.filter((e) => sd(e.date, n)).sort((a, b) => (a.startH * 60 + a.startM) - (b.startH * 60 + b.startM));
+      todayEv.forEach((e) => {
+        const d = (e.startH * 60 + e.startM) - nm;
+        if (d === 10 && lastChime !== e.id + "10") {
+          lastChime = e.id + "10";
+          if (voiceOn) { announce10min(e); } else { playAnnouce(); }
+        }
+        if (d === 5 && lastChime !== e.id + "5") {
+          lastChime = e.id + "5";
+          if (voiceOn) { announce5min(e); } else { playDeparture(); }
+        }
+        if (d === 0 && lastChime !== e.id + "0") {
+          lastChime = e.id + "0";
+          if (voiceOn) { announceStart(e); } else { playBell(); }
+        }
+      });
+      // Check conflicts and announce once
+      for (let i = 0; i < todayEv.length - 1; i++) {
+        const a = todayEv[i], b = todayEv[i + 1];
+        const aEnd = a.endH * 60 + a.endM, bStart = b.startH * 60 + b.startM;
+        if (aEnd > bStart) {
+          const cfKey = "cf_" + a.id + "_" + b.id;
+          const diff = bStart - nm;
+          if (diff > 0 && diff <= 15 && lastChime !== cfKey) {
+            lastChime = cfKey;
+            if (voiceOn) { announceConflict(a, b); } else { playAlert(); }
+          }
+        }
+      }
+    }, 30000);
+    return () => clearInterval(t);
+  }, [events, voiceOn]);
+
+  const filteredEv = useMemo(() => {
+    return events.filter((e) => {
+      if (!filters.cats.includes(e.cat)) return false;
+      if (filters.q && !e.title.includes(filters.q) && !(e.note || "").includes(filters.q)) return false;
+      return true;
+    });
+  }, [events, filters]);
+
+  const handleAdd = (date, hour, cat) => setModal({ title: "", cat: cat || "meeting", priority: "normal", date: date || today, startH: hour ?? 9, startM: 0, endH: (hour ?? 9) + 1, endM: 0, note: "" });
+  const handleEdit = (ev) => setModal({ ...ev });
+  const handleSave = (ev) => { setEvents((p) => { const i = p.findIndex((e) => e.id === ev.id); if (i >= 0) { const c = [...p]; c[i] = ev; return c; } return [...p, ev]; }); setModal(null); };
+  const handleDel = (id) => { setEvents((p) => p.filter((e) => e.id !== id)); setModal(null); };
+  const handleUpdate = (ev) => setEvents((p) => { const i = p.findIndex((e) => e.id === ev.id); if (i >= 0) { const c = [...p]; c[i] = ev; return c; } return p; });
+
+  // Build JR-style marquee: "次は XX XX:XX発 番線X ● reminder1 ● reminder2"
+  const marqueeItems = [];
+  const todayEvts = events.filter((e) => sd(e.date, today)).sort((a, b) => (a.startH * 60 + a.startM) - (b.startH * 60 + b.startM));
+  const nowM = new Date().getHours() * 60 + new Date().getMinutes();
+  const nextEv = todayEvts.find((e) => (e.startH * 60 + e.startM) > nowM);
+  const curEv = todayEvts.find((e) => nowM >= (e.startH * 60 + e.startM) && nowM <= (e.endH * 60 + e.endM));
+  if (curEv) marqueeItems.push("▶ 運行中「" + curEv.title + "」" + ft(curEv.startH, curEv.startM) + "→" + ft(curEv.endH, curEv.endM));
+  if (nextEv) { const d = (nextEv.startH * 60 + nextEv.startM) - nowM; marqueeItems.push("次は「" + nextEv.title + "」" + ft(nextEv.startH, nextEv.startM) + "発 · " + gc(nextEv.cat).label + " · あと" + d + "分"); }
+  reminders.forEach((r) => marqueeItems.push(r.t));
+  if (marqueeItems.length === 0) marqueeItems.push("全線正常運行 — 本日 " + todayEvts.length + " 件");
+  const marqueeText = marqueeItems.join("　　　◆　　　");
+
+  return (
+    <div style={{ fontFamily: font, background: JR.snow, minHeight: "100vh", color: JR.track, paddingBottom: isMobile ? 56 : 0 }}>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+      <style>{`*{box-sizing:border-box;margin:0;padding:0}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:${JR.rail}}::selection{background:${JR.blue}20}input,select,button{font-family:${font}}@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}@keyframes mq{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}`}</style>
+
+      {/* TOP BAR */}
+      <div style={{ background: JR.blue, position: "sticky", top: 0, zIndex: 100 }}>
+        <div style={{ padding: "0 " + (isMobile ? "10px" : "16px"), display: "flex", alignItems: "center", height: isMobile ? 44 : 50 }}>
+          {/* Logo */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: isMobile ? 8 : 16, borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,.2)", flexShrink: 0 }}>
+            <div style={{ width: 28, height: 28, background: "rgba(255,255,255,.15)", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 900 }}>N</div>
+            {!isMobile && <div><div style={{ fontSize: 13, fontWeight: 900, color: "#fff", letterSpacing: 2 }}>護理長行程管理</div><div style={{ fontSize: 7, color: "rgba(255,255,255,.5)", letterSpacing: 3 }}>NURSE MANAGER SCHEDULER</div></div>}
+          </div>
+          {/* Desktop tabs */}
+          {!isMobile && <div style={{ display: "flex", marginLeft: 8, height: "100%" }}>
+            {VIEWS.map((v) => (<button key={v.id} onClick={() => setView(v.id)} style={{ padding: "0 16px", height: "100%", border: "none", borderBottom: view === v.id ? "3px solid #fff" : "3px solid transparent", background: view === v.id ? "rgba(255,255,255,.1)" : "transparent", color: view === v.id ? "#fff" : "rgba(255,255,255,.55)", fontSize: 11, fontWeight: 800, cursor: "pointer", letterSpacing: 1 }}><div>{v.label}</div><div style={{ fontSize: 7, letterSpacing: 2, opacity: 0.7 }}>{v.sub}</div></button>))}
+          </div>}
+          {/* Right side */}
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: isMobile ? 8 : 12 }}>
+            {!isMobile && <div style={{ display: "flex", gap: 8 }}>{CATS.map((c) => (<div key={c.id} style={{ display: "flex", alignItems: "center", gap: 3 }}><PB cat={c.id} sz={14} /><span style={{ fontSize: 8, color: "rgba(255,255,255,.6)" }}>{c.label}</span></div>))}</div>}
+            <div style={{ background: "rgba(0,0,0,.3)", padding: "3px " + (isMobile ? "8px" : "10px") }}><div style={{ fontSize: isMobile ? 12 : 14, fontWeight: 900, color: JR.nozomi, letterSpacing: 2, fontVariantNumeric: "tabular-nums" }}>{p2(time.getHours())}:{p2(time.getMinutes())}{isMobile ? "" : ":" + p2(time.getSeconds())}</div></div>
+            {reminders.length > 0 && <div style={{ position: "relative" }}><span style={{ fontSize: 14 }}>🔔</span><span style={{ position: "absolute", top: -4, right: -6, background: JR.gRed, color: "#fff", borderRadius: "50%", width: 14, height: 14, fontSize: 8, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #fff" }}>{reminders.length}</span></div>}
+            <button onClick={() => { const nv = !voiceOn; setVoiceOn(nv); try { localStorage.setItem("voiceOn", nv); } catch(e){} if (nv) announceTest(); }} style={{ background: voiceOn ? "rgba(255,215,0,.25)" : "rgba(255,255,255,.1)", border: voiceOn ? "1px solid " + JR.nozomi : "1px solid rgba(255,255,255,.2)", color: voiceOn ? JR.nozomi : "rgba(255,255,255,.4)", fontSize: 13, cursor: "pointer", padding: "3px 8px", borderRadius: 4, display: "flex", alignItems: "center", gap: 3 }} title={voiceOn ? "語音播報 ON" : "語音播報 OFF"}><span>{voiceOn ? "🔊" : "🔇"}</span>{!isMobile && <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: 1 }}>{voiceOn ? "播報ON" : "OFF"}</span>}</button>
+            {isMobile && <button onClick={() => setShowFilter(!showFilter)} style={{ background: "rgba(255,255,255,.15)", border: "none", color: "#fff", fontSize: 14, cursor: "pointer", padding: "4px 8px", borderRadius: 4 }}>🔍</button>}
+            <button onClick={() => setShowCatSettings(true)} style={{ background: "rgba(255,255,255,.15)", border: "none", color: "#fff", fontSize: 14, cursor: "pointer", padding: "4px 8px", borderRadius: 4 }} title="番線設定">⚙</button>
+            <button onClick={() => handleAdd()} style={{ padding: isMobile ? "4px 10px" : "5px 14px", border: "2px solid rgba(255,255,255,.4)", background: "rgba(255,255,255,.1)", color: "#fff", fontSize: 11, fontWeight: 900, cursor: "pointer", letterSpacing: 1 }}>＋{isMobile ? "" : " 新規"}</button>
+          </div>
+        </div>
+        <div style={{ height: 3, background: `linear-gradient(90deg,${JR.nozomi} 0%,${JR.nozomi} 30%,transparent 30%,transparent 32%,${JR.nozomi} 32%,${JR.nozomi} 100%)` }} />
+        <div style={{ background: "#0A0A0A", padding: "4px 0", overflow: "hidden", whiteSpace: "nowrap", display: "flex", alignItems: "center", borderTop: "1px solid #222" }}>
+          {nextEv && <div style={{ background: JR.gGreen, padding: "2px 10px", fontSize: 10, fontWeight: 900, color: "#fff", letterSpacing: 2, flexShrink: 0 }}>次は</div>}
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <div style={{ display: "inline-block", animation: "mq " + Math.max(15, marqueeItems.length * 8) + "s linear infinite", fontSize: isMobile ? 10 : 12, fontWeight: 700, color: JR.nozomi, letterSpacing: 1, paddingLeft: 12 }}>{marqueeText}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter bar — collapsible on mobile */}
+      {(isMobile ? showFilter : true) && <FilterBar filters={filters} setFilters={setFilters} />}
+
+      {/* Content */}
+      {view === "dashboard" && <Dashboard events={filteredEv} today={today} todos={todos} setTodos={setTodos} onEdit={handleEdit} onAdd={handleAdd} reminders={reminders} expanded={expanded} setExpanded={setExpanded} isMobile={isMobile} />}
+      {view === "calendar" && <CalendarView events={filteredEv} today={today} onEdit={handleEdit} onAdd={handleAdd} onUpdate={handleUpdate} calSub={calSub} setCalSub={setCalSub} viewDate={viewDate} setViewDate={setViewDate} expanded={expanded} setExpanded={setExpanded} />}
+      {view === "gantt" && <GanttView events={filteredEv} today={today} onEdit={handleEdit} viewDate={viewDate} setViewDate={setViewDate} expanded={expanded} setExpanded={setExpanded} />}
+      {view === "kanban" && <KanbanView events={filteredEv} today={today} onEdit={handleEdit} onAdd={handleAdd} />}
+      {modal && <Modal event={modal} events={events} onSave={handleSave} onDelete={handleDel} onClose={() => setModal(null)} />}
+      {showCatSettings && <CatSettings cats={cats} setCats={setCats} onClose={() => setShowCatSettings(false)} />}
+
+      {/* MOBILE BOTTOM TAB BAR */}
+      {isMobile && (
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: JR.blue, display: "flex", zIndex: 100, borderTop: "3px solid " + JR.nozomi }}>
+          {VIEWS.map((v) => (
+            <button key={v.id} onClick={() => setView(v.id)} style={{ flex: 1, padding: "8px 0", border: "none", background: view === v.id ? "rgba(255,255,255,.12)" : "transparent", color: view === v.id ? "#fff" : "rgba(255,255,255,.45)", fontSize: 10, fontWeight: 800, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+              <span style={{ fontSize: 16 }}>{{ dashboard: "◉", calendar: "▦", gantt: "═", kanban: "▥" }[v.id]}</span>
+              <span style={{ letterSpacing: 1 }}>{v.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+function ConfigModal({onSave,currentUrl}){
+  const[url,setUrl]=React.useState(currentUrl||'');
+  return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:99999}}>
+    <div style={{background:"#FAFAF8",border:"3px solid #003E8A",width:420,maxWidth:"92vw",overflow:"hidden"}}>
+      <div style={{background:"#003E8A",padding:"14px 24px"}}><div style={{fontSize:16,fontWeight:900,color:"#fff",letterSpacing:2}}>初期設定</div><div style={{fontSize:10,color:"rgba(255,255,255,.6)",marginTop:2}}>INITIAL SETUP</div></div>
+      <div style={{height:4,background:"linear-gradient(90deg,#FFD700 0%,#FFD700 30%,transparent 30%,transparent 32%,#FFD700 32%,#FFD700 100%)"}}/>
+      <div style={{padding:24}}>
+        <div style={{fontSize:12,color:"#2D3436",marginBottom:12,lineHeight:1.6}}>請貼上 GAS 部署網址：<br/><span style={{fontSize:10,color:"#9E9A8F"}}>https://script.google.com/macros/s/.../exec</span></div>
+        <input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" style={{width:"100%",padding:"12px",border:"2px solid #003E8A",fontSize:13,outline:"none",boxSizing:"border-box",marginBottom:12}}/>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={()=>{if(url.trim()){localStorage.setItem('GAS_URL',url.trim());onSave(url.trim())}}} style={{flex:1,padding:"12px",border:"none",background:"#003E8A",color:"#fff",fontSize:14,fontWeight:900,cursor:"pointer",letterSpacing:2}}>接続</button>
+          <button onClick={()=>onSave('')} style={{padding:"12px 20px",border:"2px solid #E8E6E0",background:"#fff",color:"#9E9A8F",fontSize:12,fontWeight:700,cursor:"pointer"}}>離線模式</button>
+        </div>
+      </div>
+    </div>
+  </div>);
+}
+function PWAApp(){
+  const[gasUrl,setGasUrl]=React.useState(localStorage.getItem('GAS_URL')||'');
+  const[ready,setReady]=React.useState(false);
+  const[initData,setInitData]=React.useState(null);
+  const[needConfig,setNeedConfig]=React.useState(!gasUrl);
+  React.useEffect(()=>{
+    if(needConfig)return;
+    const bar=document.getElementById("bar");
+    if(bar)bar.style.width="30%";
+    if(!gasUrl){if(bar)bar.style.width="100%";setReady(true);setTimeout(()=>{const el=document.getElementById("loading");if(el)el.classList.add("done")},300);return}
+    fetch(gasUrl+'?action=load').then(r=>r.json()).then(data=>{
+      if(bar)bar.style.width="90%";setInitData(data);try{localStorage.setItem('CACHE_DATA',JSON.stringify(data))}catch(e){}
+      setTimeout(()=>{if(bar)bar.style.width="100%";setReady(true);const el=document.getElementById("loading");if(el)el.classList.add("done")},300);
+    }).catch(err=>{
+      console.warn('Load failed:',err);try{const c=localStorage.getItem('CACHE_DATA');if(c)setInitData(JSON.parse(c))}catch(e){}
+      if(bar)bar.style.width="100%";setReady(true);const el=document.getElementById("loading");if(el)el.classList.add("done");
+    });
+  },[gasUrl,needConfig]);
+  if(needConfig)return<ConfigModal currentUrl={gasUrl} onSave={url=>{setGasUrl(url);setNeedConfig(false);if(url)localStorage.setItem('GAS_URL',url)}}/>;
+  if(!ready)return null;
+  return<App initialData={initData}/>;
+}
+ReactDOM.createRoot(document.getElementById("app")).render(<PWAApp/>);
+</script>
+</body>
+</html>
