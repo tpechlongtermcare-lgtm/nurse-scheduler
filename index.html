@@ -6,7 +6,7 @@
 <title>護理長行程管理</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#003E8A">
-<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="行程管理">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -34,17 +34,12 @@ body{font-family:'Noto Sans TC','Hiragino Sans',-apple-system,sans-serif;backgro
   <div class="b"><div class="bi" id="bar" style="width:10%"></div></div>
 </div>
 <div id="app"></div>
-<script>
-if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').then(r=>console.log('SW:',r.scope)).catch(e=>console.warn('SW fail:',e));}
-</script>
+<script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').then(r=>console.log('SW:',r.scope)).catch(e=>console.warn('SW fail:',e));}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.15.0/Recharts.min.js"></script>
 <script type="text/babel">
 const {useState,useEffect,useMemo}=React;
-const {PieChart,Pie,Cell,BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer}=Recharts;
 const GAS_URL=localStorage.getItem('GAS_URL')||'';
 const GAS={
   loadData:async()=>{if(!GAS_URL)return null;return(await fetch(GAS_URL+'?action=load')).json()},
@@ -765,31 +760,56 @@ function WeekCharts({ events, today }) {
   const ws = sow(today), we = addD(ws, 7);
   const weekEv = events.filter((e) => e.date >= ws && e.date < we);
   const pieData = CATS.map((c) => ({ name: c.label, value: weekEv.filter((e) => e.cat === c.id).length, color: c.color })).filter((d) => d.value > 0);
-  const barData = Array.from({ length: 7 }, (_, i) => { const d = addD(ws, i); return { name: WD[d.getDay()], count: weekEv.filter((e) => sd(e.date, d)).length }; });
+  const barData = Array.from({ length: 7 }, (_, i) => { const d = addD(ws, i); return { name: WD[d.getDay()], count: weekEv.filter((e) => sd(e.date, d)).length, isToday: sd(addD(ws, i), today) }; });
+  const total = pieData.reduce((s, d) => s + d.value, 0);
+  const maxBar = Math.max(1, ...barData.map((d) => d.count));
+
+  // SVG donut chart
+  const R = 40, CX = 55, CY = 55, SW = 14;
+  let cumAngle = 0;
+  const arcs = pieData.map((d) => {
+    const pct = d.value / (total || 1);
+    const startA = cumAngle;
+    cumAngle += pct * 360;
+    const endA = cumAngle;
+    const s = (Math.PI / 180) * (startA - 90), e2 = (Math.PI / 180) * (endA - 90);
+    const x1 = CX + R * Math.cos(s), y1 = CY + R * Math.sin(s);
+    const x2 = CX + R * Math.cos(e2), y2 = CY + R * Math.sin(e2);
+    const large = pct > 0.5 ? 1 : 0;
+    return { ...d, path: `M ${x1} ${y1} A ${R} ${R} 0 ${large} 1 ${x2} ${y2}` };
+  });
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      {/* Donut */}
       <div style={{ background: "#fff", border: "2px solid " + JR.steel, overflow: "hidden" }}>
         <SH title="本週分佈" sub="CATEGORY" />
-        <div style={{ padding: 8, height: 150 }}>
-          {pieData.length === 0 ? <div style={{ textAlign: "center", color: JR.concrete, paddingTop: 50, fontSize: 12 }}>無資料</div> :
-            <ResponsiveContainer><PieChart><Pie data={pieData} cx="50%" cy="50%" outerRadius={50} innerRadius={25} dataKey="value" strokeWidth={2} stroke="#fff">
-              {pieData.map((d, i) => <Cell key={i} fill={d.color} />)}
-            </Pie><Tooltip formatter={(v, n) => [v + "件", n]} contentStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer>}
+        <div style={{ padding: 8, display: "flex", justifyContent: "center" }}>
+          {total === 0 ? <div style={{ textAlign: "center", color: JR.concrete, padding: 40, fontSize: 12 }}>無資料</div> : (
+            <svg width="110" height="110" viewBox="0 0 110 110">
+              {arcs.map((a, i) => <path key={i} d={a.path} fill="none" stroke={a.color} strokeWidth={SW} strokeLinecap="butt" />)}
+              <text x={CX} y={CY - 4} textAnchor="middle" fill={JR.track} fontSize="18" fontWeight="900">{total}</text>
+              <text x={CX} y={CY + 10} textAnchor="middle" fill={JR.concrete} fontSize="8" fontWeight="700">件/本週</text>
+            </svg>
+          )}
         </div>
         <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: "0 8px 8px", flexWrap: "wrap" }}>
           {pieData.map((d) => (<div key={d.name} style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10 }}><div style={{ width: 8, height: 8, borderRadius: 2, background: d.color }} />{d.name} {d.value}</div>))}
         </div>
       </div>
+      {/* Bar chart */}
       <div style={{ background: "#fff", border: "2px solid " + JR.steel, overflow: "hidden" }}>
         <SH title="每日件數" sub="DAILY" />
-        <div style={{ padding: 8, height: 180 }}>
-          <ResponsiveContainer><BarChart data={barData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-            <XAxis dataKey="name" tick={{ fontSize: 10, fill: JR.concrete }} />
-            <YAxis tick={{ fontSize: 10, fill: JR.concrete }} allowDecimals={false} />
-            <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v) => [v + "件", "行程"]} />
-            <Bar dataKey="count" fill={JR.blueG} radius={[3, 3, 0, 0]} />
-          </BarChart></ResponsiveContainer>
+        <div style={{ padding: "12px 12px 8px", display: "flex", alignItems: "flex-end", gap: 6, height: 160 }}>
+          {barData.map((d, i) => (
+            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: d.count > 0 ? JR.track : JR.rail }}>{d.count || ""}</div>
+              <div style={{ width: "100%", height: 100, display: "flex", alignItems: "flex-end" }}>
+                <div style={{ width: "100%", height: maxBar > 0 ? (d.count / maxBar) * 100 : 0, background: d.isToday ? JR.blue : JR.blueG + "80", borderRadius: "3px 3px 0 0", transition: "height .3s", minHeight: d.count > 0 ? 4 : 0 }} />
+              </div>
+              <div style={{ fontSize: 9, fontWeight: d.isToday ? 900 : 600, color: d.isToday ? JR.blue : JR.concrete }}>{d.name}</div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -1308,6 +1328,8 @@ function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [showFilter, setShowFilter] = useState(false);
   const [voiceOn, setVoiceOn] = useState(() => { try { return localStorage.getItem("voiceOn") !== "false"; } catch(e) { return true; } });
+  const [syncStatus, setSyncStatus] = useState("ok"); // ok | syncing | error
+  const [dataVersion, setDataVersion] = useState(0);
 
   // Sync module-level CATS for gc() function
   useEffect(() => { CATS = cats; }, [cats]);
@@ -1317,6 +1339,30 @@ function App() {
 
   useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
   useEffect(() => { const h = () => setIsMobile(window.innerWidth < 768); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
+
+  // ── Real-time sync: poll version every 15s ──
+  useEffect(() => {
+    const gasUrl = typeof GAS_URL !== "undefined" ? GAS_URL : (typeof localStorage !== "undefined" ? localStorage.getItem("GAS_URL") : "");
+    if (!gasUrl) return;
+    const poll = async () => {
+      try {
+        const resp = await fetch(gasUrl + "?action=version");
+        const data = await resp.json();
+        if (data.v && data.v !== dataVersion) {
+          setSyncStatus("syncing");
+          const full = await fetch(gasUrl + "?action=load");
+          const allData = await full.json();
+          if (allData.events) setEvents(allData.events.map((e) => ({ ...e, date: new Date(e.date) })));
+          if (allData.todos) setTodos(allData.todos.map((t) => ({ ...t, dueDate: t.dueDate ? new Date(t.dueDate) : new Date() })));
+          if (allData.cats && allData.cats.length > 0) { setCats(allData.cats); CATS = allData.cats; }
+          setDataVersion(data.v);
+          setSyncStatus("ok");
+        }
+      } catch (e) { setSyncStatus("error"); }
+    };
+    const t = setInterval(poll, 15000);
+    return () => clearInterval(t);
+  }, [dataVersion]);
 
   useEffect(() => {
     let lastChime = "";
@@ -1401,7 +1447,7 @@ function App() {
           {/* Right side */}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: isMobile ? 8 : 12 }}>
             {!isMobile && <div style={{ display: "flex", gap: 8 }}>{CATS.map((c) => (<div key={c.id} style={{ display: "flex", alignItems: "center", gap: 3 }}><PB cat={c.id} sz={14} /><span style={{ fontSize: 8, color: "rgba(255,255,255,.6)" }}>{c.label}</span></div>))}</div>}
-            <div style={{ background: "rgba(0,0,0,.3)", padding: "3px " + (isMobile ? "8px" : "10px") }}><div style={{ fontSize: isMobile ? 12 : 14, fontWeight: 900, color: JR.nozomi, letterSpacing: 2, fontVariantNumeric: "tabular-nums" }}>{p2(time.getHours())}:{p2(time.getMinutes())}{isMobile ? "" : ":" + p2(time.getSeconds())}</div></div>
+            <div style={{ background: "rgba(0,0,0,.3)", padding: "3px " + (isMobile ? "8px" : "10px"), display: "flex", alignItems: "center", gap: 6 }}><div style={{ fontSize: isMobile ? 12 : 14, fontWeight: 900, color: JR.nozomi, letterSpacing: 2, fontVariantNumeric: "tabular-nums" }}>{p2(time.getHours())}:{p2(time.getMinutes())}{isMobile ? "" : ":" + p2(time.getSeconds())}</div><div style={{ width: 6, height: 6, borderRadius: "50%", background: syncStatus === "ok" ? JR.gGreen : syncStatus === "syncing" ? JR.nozomi : JR.gRed, animation: syncStatus === "syncing" ? "blink .8s infinite" : "none" }} title={syncStatus === "ok" ? "已同步" : syncStatus === "syncing" ? "同步中..." : "同步失敗"} /></div>
             {reminders.length > 0 && <div style={{ position: "relative" }}><span style={{ fontSize: 14 }}>🔔</span><span style={{ position: "absolute", top: -4, right: -6, background: JR.gRed, color: "#fff", borderRadius: "50%", width: 14, height: 14, fontSize: 8, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #fff" }}>{reminders.length}</span></div>}
             <button onClick={() => { const nv = !voiceOn; setVoiceOn(nv); try { localStorage.setItem("voiceOn", nv); } catch(e){} if (nv) announceTest(); }} style={{ background: voiceOn ? "rgba(255,215,0,.25)" : "rgba(255,255,255,.1)", border: voiceOn ? "1px solid " + JR.nozomi : "1px solid rgba(255,255,255,.2)", color: voiceOn ? JR.nozomi : "rgba(255,255,255,.4)", fontSize: 13, cursor: "pointer", padding: "3px 8px", borderRadius: 4, display: "flex", alignItems: "center", gap: 3 }} title={voiceOn ? "語音播報 ON" : "語音播報 OFF"}><span>{voiceOn ? "🔊" : "🔇"}</span>{!isMobile && <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: 1 }}>{voiceOn ? "播報ON" : "OFF"}</span>}</button>
             {isMobile && <button onClick={() => setShowFilter(!showFilter)} style={{ background: "rgba(255,255,255,.15)", border: "none", color: "#fff", fontSize: 14, cursor: "pointer", padding: "4px 8px", borderRadius: 4 }}>🔍</button>}
@@ -1453,7 +1499,7 @@ function ConfigModal({onSave,currentUrl}){
         <div style={{fontSize:12,color:"#2D3436",marginBottom:12,lineHeight:1.6}}>請貼上 GAS 部署網址：<br/><span style={{fontSize:10,color:"#9E9A8F"}}>https://script.google.com/macros/s/.../exec</span></div>
         <input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" style={{width:"100%",padding:"12px",border:"2px solid #003E8A",fontSize:13,outline:"none",boxSizing:"border-box",marginBottom:12}}/>
         <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>{if(url.trim()){localStorage.setItem('GAS_URL',url.trim());onSave(url.trim())}}} style={{flex:1,padding:"12px",border:"none",background:"#003E8A",color:"#fff",fontSize:14,fontWeight:900,cursor:"pointer",letterSpacing:2}}>接続</button>
+          <button onClick={()=>{if(url.trim()){localStorage.setItem('GAS_URL',url.trim());location.reload()}}} style={{flex:1,padding:"12px",border:"none",background:"#003E8A",color:"#fff",fontSize:14,fontWeight:900,cursor:"pointer",letterSpacing:2}}>接続</button>
           <button onClick={()=>onSave('')} style={{padding:"12px 20px",border:"2px solid #E8E6E0",background:"#fff",color:"#9E9A8F",fontSize:12,fontWeight:700,cursor:"pointer"}}>離線模式</button>
         </div>
       </div>
@@ -1461,7 +1507,7 @@ function ConfigModal({onSave,currentUrl}){
   </div>);
 }
 function PWAApp(){
-  const[gasUrl,setGasUrl]=React.useState(localStorage.getItem('GAS_URL')||'');
+  const[gasUrl]=React.useState(localStorage.getItem('GAS_URL')||'');
   const[ready,setReady]=React.useState(false);
   const[initData,setInitData]=React.useState(null);
   const[needConfig,setNeedConfig]=React.useState(!gasUrl);
@@ -1478,7 +1524,7 @@ function PWAApp(){
       if(bar)bar.style.width="100%";setReady(true);const el=document.getElementById("loading");if(el)el.classList.add("done");
     });
   },[gasUrl,needConfig]);
-  if(needConfig)return<ConfigModal currentUrl={gasUrl} onSave={url=>{setGasUrl(url);setNeedConfig(false);if(url)localStorage.setItem('GAS_URL',url)}}/>;
+  if(needConfig)return<ConfigModal currentUrl={gasUrl} onSave={url=>{setNeedConfig(false)}}/>;
   if(!ready)return null;
   return<App initialData={initData}/>;
 }
