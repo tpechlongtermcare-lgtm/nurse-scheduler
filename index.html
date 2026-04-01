@@ -37,7 +37,45 @@ body{font-family:'Noto Sans TC','Hiragino Sans',-apple-system,sans-serif;backgro
 <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').then(r=>console.log('SW:',r.scope)).catch(e=>console.warn('SW fail:',e));}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script>
+// ═══════ FIREBASE CONFIG — 貼入你的設定 ═══════
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDAR_sR9gNyh-eo8z51I7ku3VgAo9wwoVI",
+  authDomain: "nurse-scheduler-ff051.firebaseapp.com",
+  projectId: "nurse-scheduler-ff051",
+  storageBucket: "nurse-scheduler-ff051.firebasestorage.app",
+  messagingSenderId: "658105158354",
+  appId: "1:658105158354:web:4209e5c1dc5ffd08c4bb0b"
+};
+const VAPID_KEY = "BB-beQva2nSlVBP0QE0RgcyTHqUMZaRmTDEinfPIosvtaEHnVn0kSVwaqLs6SjZFTWp0Y6FaZMBimwrmIJAz-do";
+
+// Init Firebase
+let _messaging = null;
+try {
+  if (FIREBASE_CONFIG.apiKey !== "在此貼入") {
+    firebase.initializeApp(FIREBASE_CONFIG);
+    _messaging = firebase.messaging();
+  }
+} catch(e) { console.warn('Firebase init:', e); }
+
+async function requestNotificationPermission() {
+  if (!_messaging) return null;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') return null;
+    const token = await _messaging.getToken({ vapidKey: VAPID_KEY });
+    if (token) {
+      // Save to GAS
+      const gasUrl = 'https://script.google.com/macros/s/AKfycbzFlNxrngfvvo5r9K3K-F8kYgbQJCUVt_9b-bVpse1wFiL-bp_U62cEMTb-4O9QfKM3xg/exec';
+      fetch(gasUrl + '?action=saveFCMToken&data=' + encodeURIComponent(JSON.stringify({token: token})));
+    }
+    return token;
+  } catch(e) { console.warn('FCM token error:', e); return null; }
+}
+</script>
 <script type="text/babel">
 const {useState,useEffect,useMemo}=React;
 const GAS_URL='https://script.google.com/macros/s/AKfycbzFlNxrngfvvo5r9K3K-F8kYgbQJCUVt_9b-bVpse1wFiL-bp_U62cEMTb-4O9QfKM3xg/exec';
@@ -1535,6 +1573,39 @@ function App({ initialData }) {
     </div>
   );
 }
+// ═══════ NOTIFICATION BANNER ═══════
+function NotifBanner() {
+  const [status, setStatus] = React.useState(() => {
+    if (typeof Notification === 'undefined') return 'unsupported';
+    if (Notification.permission === 'granted') return 'granted';
+    if (Notification.permission === 'denied') return 'denied';
+    return 'default';
+  });
+  const [loading, setLoading] = React.useState(false);
+
+  if (status === 'granted' || status === 'unsupported' || !_messaging) return null;
+  if (status === 'denied') return (
+    <div style={{background:'#E60012',padding:'8px 16px',display:'flex',alignItems:'center',gap:8,justifyContent:'center'}}>
+      <span style={{fontSize:12,color:'#fff',fontWeight:700}}>通知已被封鎖 — 請到瀏覽器設定中開啟通知權限</span>
+    </div>
+  );
+
+  return (
+    <div style={{background:'#003E8A',padding:'8px 16px',display:'flex',alignItems:'center',gap:10,justifyContent:'center',borderBottom:'2px solid #FFD700'}}>
+      <span style={{fontSize:13}}>🔔</span>
+      <span style={{fontSize:12,color:'#fff',fontWeight:700}}>啟用推播通知，行程前自動提醒</span>
+      <button onClick={async()=>{
+        setLoading(true);
+        const token = await requestNotificationPermission();
+        setStatus(token ? 'granted' : 'denied');
+        setLoading(false);
+      }} disabled={loading} style={{padding:'5px 16px',border:'2px solid #FFD700',background:'rgba(255,215,0,.15)',color:'#FFD700',fontSize:11,fontWeight:900,cursor:'pointer',letterSpacing:1}}>
+        {loading ? '設定中...' : '啟用通知'}
+      </button>
+    </div>
+  );
+}
+
 function PWAApp(){
   const[ready,setReady]=React.useState(false);
   const[initData,setInitData]=React.useState(null);
@@ -1552,7 +1623,7 @@ function PWAApp(){
     });
   },[]);
   if(!ready)return null;
-  return<App initialData={initData}/>;
+  return<><NotifBanner/><App initialData={initData}/></>;
 }
 ReactDOM.createRoot(document.getElementById("app")).render(<PWAApp/>);
 </script>
