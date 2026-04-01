@@ -1,5 +1,5 @@
 // ═══════ 護理長行程管理 — Service Worker ═══════
-const CACHE_NAME = 'nurse-scheduler-v3';
+const CACHE_NAME = 'nurse-scheduler-v4';
 const SHELL_URLS = [
   './',
   './index.html',
