@@ -1618,10 +1618,44 @@ function NotifBanner() {
   const [loading, setLoading] = React.useState(false);
   const [msg, setMsg] = React.useState('');
 
-  // Already granted - hide after brief confirmation
+  // Auto-register token if permission already granted
+  React.useEffect(() => {
+    if (Notification.permission === 'granted') {
+      registerToken();
+    }
+  }, []);
+
+  async function registerToken() {
+    try {
+      if (!_swReg) _swReg = await navigator.serviceWorker.ready;
+      if (!_messaging) initFirebase();
+      if (!_messaging) { console.error('No messaging'); return; }
+      
+      var token = await _messaging.getToken({
+        vapidKey: VAPID_KEY,
+        serviceWorkerRegistration: _swReg
+      });
+      console.log('FCM Token obtained:', token ? token.substring(0, 20) + '...' : 'null');
+      
+      if (token) {
+        var saveUrl = GAS_URL + '?action=saveFCMToken&data=' + encodeURIComponent(JSON.stringify({token: token}));
+        console.log('Saving token to GAS...');
+        var resp = await fetch(saveUrl);
+        var result = await resp.json();
+        console.log('Token save result:', JSON.stringify(result));
+        setMsg('✅ Token 已儲存');
+      }
+    } catch(e) {
+      console.error('Token registration error:', e);
+      setMsg('⚠ ' + e.message);
+    }
+  }
+
   if (status === 'granted') return (
-    <div style={{background:'#00A651',padding:'6px 16px',display:'flex',alignItems:'center',gap:8,justifyContent:'center'}}>
-      <span style={{fontSize:11,color:'#fff',fontWeight:700}}>✅ 推播通知已啟用 — 行程前會自動通知</span>
+    <div style={{background:'#00A651',padding:'6px 16px',display:'flex',alignItems:'center',gap:8,justifyContent:'center',flexWrap:'wrap'}}>
+      <span style={{fontSize:11,color:'#fff',fontWeight:700}}>✅ 推播通知已啟用</span>
+      {msg && <span style={{fontSize:9,color:'rgba(255,255,255,.7)'}}>{msg}</span>}
+      <button onClick={registerToken} style={{padding:'3px 10px',border:'1px solid rgba(255,255,255,.5)',background:'transparent',color:'#fff',fontSize:9,cursor:'pointer',fontWeight:700}}>重新註冊</button>
     </div>
   );
   if (status === 'unsupported') return null;
@@ -1636,20 +1670,12 @@ function NotifBanner() {
       <span style={{fontSize:13}}>🔔</span>
       <span style={{fontSize:12,color:'#fff',fontWeight:700}}>啟用推播通知，行程前自動提醒</span>
       <button onClick={async()=>{
-        setLoading(true);
-        setMsg('');
+        setLoading(true); setMsg('');
         try {
           var token = await requestNotificationPermission();
-          if (token) {
-            setStatus('granted');
-            setMsg('✅ 已啟用');
-          } else {
-            setStatus(Notification.permission === 'denied' ? 'denied' : 'default');
-            setMsg('❌ 未取得權限');
-          }
-        } catch(e) {
-          setMsg('❌ ' + e.message);
-        }
+          if (token) { setStatus('granted'); setMsg('✅ 已啟用'); }
+          else { setStatus(Notification.permission === 'denied' ? 'denied' : 'default'); setMsg('❌ 未取得權限'); }
+        } catch(e) { setMsg('❌ ' + e.message); }
         setLoading(false);
       }} disabled={loading} style={{padding:'5px 16px',border:'2px solid #FFD700',background:'rgba(255,215,0,.15)',color:'#FFD700',fontSize:11,fontWeight:900,cursor:'pointer',letterSpacing:1}}>
         {loading ? '設定中...' : '啟用通知'}
